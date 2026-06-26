@@ -1,15 +1,31 @@
 {
   "name": "electrond",
   "version": "0.1.0",
-  "description": "Electron CDP daemon. nodesh evaluates JS.",
+  "description": "Desktop overlay daemon. Drop HTML files, widgets appear on screen.",
   "main": "hud.js",
   "bin": {
     "electrond": "bin/electrond.js",
     "nodesh": "bin/nodesh.js"
   },
+  "files": [
+    "bin/",
+    "lib/",
+    "hud.js",
+    "overlay.html",
+    "hud.html",
+    "analyzer.html",
+    "browser.html",
+    "SKILL.md"
+  ],
   "scripts": {
     "start": "electron ."
   },
+  "keywords": ["electron", "overlay", "hud", "daemon", "cdp", "desktop"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rangersui/electrond.git"
+  },
+  "license": "MIT",
   "dependencies": {
     "electron": "^42.5.0",
     "ws": "^8.0.0"
