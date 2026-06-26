@@ -1,0 +1,17 @@
+{
+  "name": "electrond",
+  "version": "0.1.0",
+  "description": "Electron CDP daemon. nodesh evaluates JS.",
+  "main": "hud.js",
+  "bin": {
+    "electrond": "bin/electrond.js",
+    "nodesh": "bin/nodesh.js"
+  },
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^42.5.0",
+    "ws": "^8.0.0"
+  }
+}

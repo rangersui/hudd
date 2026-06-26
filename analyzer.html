@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>analyzer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: transparent;
+    font-family: 'Consolas', monospace;
+  }
+
+  .zone {
+    width: 100%; height: 100%;
+    border: 2px dashed rgba(255, 170, 0, 0.5);
+    border-radius: 6px;
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+  .zone.active {
+    border-color: rgba(0, 255, 136, 0.7);
+    border-style: solid;
+    animation: scan-pulse 2s infinite;
+  }
+  @keyframes scan-pulse {
+    0%, 100% { border-color: rgba(0, 255, 136, 0.7); }
+    50%      { border-color: rgba(0, 255, 136, 0.3); }
+  }
+
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 8px;
+    background: rgba(10, 10, 25, 0.88);
+    border-radius: 4px 4px 0 0;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+
+  .left-group { display: flex; align-items: center; gap: 6px; }
+  .title { font-size: 10px; color: #ffaa00; letter-spacing: 1px; text-transform: uppercase; }
+  .zone.active .title { color: #00ff88; }
+
+  .controls { display: flex; gap: 4px; align-items: center; -webkit-app-region: no-drag; }
+  .btn {
+    border: none; cursor: pointer; font-size: 9px;
+    padding: 2px 6px; border-radius: 3px;
+    font-family: 'Consolas', monospace;
+  }
+  .btn-mode {
+    background: rgba(255, 255, 255, 0.05);
+    color: #666;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .btn-mode.selected {
+    color: #00d4ff;
+    border-color: rgba(0, 212, 255, 0.4);
+    background: rgba(0, 212, 255, 0.1);
+  }
+  .btn-mode:hover { background: rgba(255, 255, 255, 0.1); }
+  .sep { width: 1px; height: 12px; background: rgba(255,255,255,0.1); margin: 0 2px; }
+  .btn-start {
+    background: rgba(0, 255, 136, 0.15);
+    color: #00ff88;
+    border: 1px solid rgba(0, 255, 136, 0.3);
+  }
+  .btn-start:hover { background: rgba(0, 255, 136, 0.3); }
+  .btn-stop {
+    background: rgba(255, 68, 68, 0.15);
+    color: #ff4444;
+    border: 1px solid rgba(255, 68, 68, 0.3);
+  }
+  .btn-stop:hover { background: rgba(255, 68, 68, 0.3); }
+  .btn-close {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: rgba(255, 60, 60, 0.6); color: #000;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; padding: 0; border: none; cursor: pointer;
+  }
+
+  .body { flex: 1; }
+  .fps { font-size: 9px; color: rgba(255,255,255,0.3); position: absolute; bottom: 4px; left: 8px; }
+</style>
+</head>
+<body>
+<div class="zone" id="zone">
+  <div class="header">
+    <span class="title">&#9635; ANALYSIS</span>
+    <div class="controls">
+      <button class="btn btn-mode selected" id="btn-ui">UI</button>
+      <button class="btn btn-mode" id="btn-obj">OBJ</button>
+      <div class="sep"></div>
+      <button class="btn btn-start" id="btn-toggle">&#9654;</button>
+      <button class="btn btn-close" id="btn-close">&times;</button>
+    </div>
+  </div>
+  <div class="body"></div>
+  <div class="fps" id="fps-display"></div>
+</div>
+
+<script>
+  const { ipcRenderer } = require("electron");
+
+  const widgetId = "analyzer";
+
+  // ── State on window — AI reads via CDP evaluate() ──
+  window.analyzerState = { active: false, mode: "ui", bounds: null };
+
+  // ── Mode toggle ──
+  document.getElementById("btn-ui").addEventListener("click", () => {
+    window.analyzerState.mode = "ui";
+    document.getElementById("btn-ui").classList.add("selected");
+    document.getElementById("btn-obj").classList.remove("selected");
+    if (window.analyzerState.active) updateBounds();
+  });
+  document.getElementById("btn-obj").addEventListener("click", () => {
+    window.analyzerState.mode = "obj";
+    document.getElementById("btn-obj").classList.add("selected");
+    document.getElementById("btn-ui").classList.remove("selected");
+    if (window.analyzerState.active) updateBounds();
+  });
+
+  // ── Native drag/resize: update bounds ──
+  ipcRenderer.on("position-changed", () => {
+    if (window.analyzerState.active) updateBounds();
+  });
+
+  // ── Update bounds (stored on window for CDP access) ──
+  async function updateBounds() {
+    const bounds = await ipcRenderer.invoke("get-analyzer-bounds");
+    if (bounds) {
+      bounds.mode = window.analyzerState.mode;
+      window.analyzerState.bounds = bounds;
+    }
+  }
+
+  // ── Start / Stop ──
+  document.getElementById("btn-toggle").addEventListener("click", async () => {
+    window.analyzerState.active = !window.analyzerState.active;
+    const zone = document.getElementById("zone");
+    const btn = document.getElementById("btn-toggle");
+    if (window.analyzerState.active) {
+      zone.classList.add("active");
+      btn.innerHTML = "&#9632;";
+      btn.className = "btn btn-stop";
+      await updateBounds();
+    } else {
+      zone.classList.remove("active");
+      btn.innerHTML = "&#9654;";
+      btn.className = "btn btn-start";
+      window.analyzerState.bounds = null;
+      document.getElementById("fps-display").textContent = "";
+    }
+  });
+
+  // ── Close ──
+  document.getElementById("btn-close").addEventListener("click", () => {
+    window.analyzerState.active = false;
+    ipcRenderer.send("close-widget", widgetId);
+  });
+</script>
+</body></html>
