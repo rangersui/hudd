@@ -10,12 +10,12 @@ const VERSION = "0.1.0";
 const APP_DIR = path.join(__dirname, "..");
 
 function usage() {
-  console.log(`electrond ${VERSION} -- Electron CDP daemon
+  console.log(`hudd ${VERSION} -- Electron CDP daemon
 
 Usage:
-  electrond daemon [--port N]    start Electron with CDP (default 9500)
-  electrond stop                 stop daemon
-  electrond -V                   version`);
+  hudd daemon [--port N]    start Electron with CDP (default 9500)
+  hudd stop                 stop daemon
+  hudd -V                   version`);
 }
 
 async function waitForCDP(port, retries = 30) {
@@ -60,7 +60,7 @@ async function daemon(port) {
   };
   fs.writeFileSync(DAEMON_JSON, JSON.stringify(info, null, 2));
 
-  console.log(`electrond ${VERSION}`);
+  console.log(`hudd ${VERSION}`);
   console.log(`  app:      ${APP_DIR}`);
   console.log(`  electron: ${electronPath}`);
   console.log(`  cdp:      http://127.0.0.1:${port}`);
@@ -124,7 +124,7 @@ if (!args.length || args[0] === "-h" || args[0] === "--help") {
   process.exit(0);
 }
 if (args[0] === "-V" || args[0] === "--version") {
-  console.log(`electrond ${VERSION}`);
+  console.log(`hudd ${VERSION}`);
   process.exit(0);
 }
 if (args[0] === "daemon") {

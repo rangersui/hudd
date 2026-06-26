@@ -1,11 +1,11 @@
 {
-  "name": "electrond",
+  "name": "hudd",
   "version": "0.1.0",
   "description": "Desktop overlay daemon. Drop HTML files, widgets appear on screen.",
   "main": "hud.js",
   "bin": {
-    "electrond": "bin/electrond.js",
-    "nodesh": "bin/nodesh.js"
+    "hudd": "bin/hudd.js",
+    "hudsh": "bin/hudsh.js"
   },
   "files": [
     "bin/",

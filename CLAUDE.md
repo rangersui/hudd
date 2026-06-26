@@ -1,15 +1,15 @@
-# electrond
+# hudd
 
 Desktop overlay daemon. Electron + CDP on port 9500.
 
 ## Structure
 
 ```
-electrond/
+hudd/
 ├── package.json        npm package — bin entries + dependencies
 ├── bin/
-│   ├── electrond.js    daemon CLI (start/stop)
-│   └── nodesh.js       page CLI (run/ls/kill/status/attach)
+│   ├── hudd.js    daemon CLI (start/stop)
+│   └── hudsh.js       page CLI (run/ls/kill/status/attach)
 ├── lib/
 │   └── cdp.js          CDP HTTP + WebSocket helpers
 ├── hud.js              Electron main process
@@ -21,27 +21,27 @@ electrond/
 
 ## Key paths
 
-- **daemon.json**: `%LOCALAPPDATA%\electrond\daemon.json` — PID, port, app dir
-- **hooks dir**: `%LOCALAPPDATA%\electrond\hooks\` — drop HTML here → widget appears
+- **daemon.json**: `%LOCALAPPDATA%\hudd\daemon.json` — PID, port, app dir
+- **hooks dir**: `%LOCALAPPDATA%\hudd\hooks\` — drop HTML here → widget appears
 
 ## Architecture
 
-electrond is a display-only daemon. It does not compute or scrape.
+hudd is a display-only daemon. It does not compute or scrape.
 
 - **hooks/ (fs.watch)**: write HTML file → widget auto-loads. Modify → reloads. Delete → closes. Preferred for all display tasks.
-- **nodesh run**: evaluate JS in a page via CDP WebSocket. Use for reading state or quick DOM updates that need a return value.
-- **CDP port 9500**: `app.commandLine.appendSwitch("remote-debugging-port", "9500")` in hud.js. Configurable via `electrond daemon --port N`.
+- **hudsh run**: evaluate JS in a page via CDP WebSocket. Use for reading state or quick DOM updates that need a return value.
+- **CDP port 9500**: `app.commandLine.appendSwitch("remote-debugging-port", "9500")` in hud.js. Configurable via `hudd daemon --port N`.
 
 ## Dev commands
 
 ```bash
 npm install             # install electron + ws
-npm link                # register electrond/nodesh globally
-npm start               # electron . (same as electrond daemon)
-electrond daemon        # start daemon (foreground, ctrl+c to stop)
-electrond stop          # stop daemon
-nodesh ls               # list pages
-nodesh run overlay "1+1"  # evaluate JS
+npm link                # register hudd/hudsh globally
+npm start               # electron . (same as hudd daemon)
+hudd daemon        # start daemon (foreground, ctrl+c to stop)
+hudd stop          # stop daemon
+hudsh ls               # list pages
+hudsh run overlay "1+1"  # evaluate JS
 ```
 
 ## Widget IDs
@@ -51,7 +51,7 @@ Hook widgets: `hook-<filename>` (e.g., `hooks/cpu.html` → widget ID `hook-cpu`
 
 ## Conventions
 
-- All HTML pages set `<title>` — nodesh finds pages by title
+- All HTML pages set `<title>` — hudsh finds pages by title
 - Draggable: `-webkit-app-region: drag` on the header element
 - Transparent: `background: transparent` + `backgroundColor: "#00000000"` in BrowserWindow
 - `nodeIntegration: true` on all windows — `require('fs')` etc. work in renderer

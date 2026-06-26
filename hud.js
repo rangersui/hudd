@@ -218,7 +218,7 @@ ipcMain.on("create-widget", (_e, data) => {
 // ════════════════════════════════════════════
 
 const LOCALAPPDATA = process.env.LOCALAPPDATA || os.homedir();
-const HOOKS_DIR = path.join(LOCALAPPDATA, "electrond", "hooks");
+const HOOKS_DIR = path.join(LOCALAPPDATA, "hudd", "hooks");
 
 function loadHookWidget(filename) {
   const id = "hook-" + filename.replace(".html", "");

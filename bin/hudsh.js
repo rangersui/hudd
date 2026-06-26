@@ -7,15 +7,15 @@ const { cdpList, findPage, cdpEval, getPort } = require("../lib/cdp");
 const VERSION = "0.1.0";
 
 function usage() {
-  console.log(`nodesh -- client for electrond pages
+  console.log(`hudsh -- client for hudd pages
 
 Usage:
-  nodesh run <page> <js>     evaluate JS in a page
-  nodesh ls                  list pages
-  nodesh kill <page>         close a page
-  nodesh status <page>       page info
-  nodesh attach <page>       open DevTools URL
-  nodesh -V                  version`);
+  hudsh run <page> <js>     evaluate JS in a page
+  hudsh ls                  list pages
+  hudsh kill <page>         close a page
+  hudsh status <page>       page info
+  hudsh attach <page>       open DevTools URL
+  hudsh -V                  version`);
 }
 
 async function cmdLs() {
@@ -130,7 +130,7 @@ if (!args.length || args[0] === "-h" || args[0] === "--help") {
   process.exit(0);
 }
 if (args[0] === "-V" || args[0] === "--version") {
-  console.log(`electrond ${VERSION}`);
+  console.log(`hudd ${VERSION}`);
   process.exit(0);
 }
 
@@ -142,28 +142,28 @@ if (args[0] === "-V" || args[0] === "--version") {
         break;
       case "run":
         if (!args[1]) {
-          console.error("ERR: nodesh run <page> <js>");
+          console.error("ERR: hudsh run <page> <js>");
           process.exit(1);
         }
         await cmdRun(args[1], args.slice(2).join(" "));
         break;
       case "kill":
         if (!args[1]) {
-          console.error("ERR: nodesh kill <page>");
+          console.error("ERR: hudsh kill <page>");
           process.exit(1);
         }
         await cmdKill(args[1]);
         break;
       case "status":
         if (!args[1]) {
-          console.error("ERR: nodesh status <page>");
+          console.error("ERR: hudsh status <page>");
           process.exit(1);
         }
         await cmdStatus(args[1]);
         break;
       case "attach":
         if (!args[1]) {
-          console.error("ERR: nodesh attach <page>");
+          console.error("ERR: hudsh attach <page>");
           process.exit(1);
         }
         await cmdAttach(args[1]);
