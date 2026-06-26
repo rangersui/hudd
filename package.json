@@ -23,7 +23,7 @@
   "keywords": ["electron", "overlay", "hud", "daemon", "cdp", "desktop"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/rangersui/electrond.git"
+    "url": "https://github.com/rangersui/hudd.git"
   },
   "license": "MIT",
   "dependencies": {
