@@ -105,8 +105,12 @@ async function daemon(port) {
   // check, GPU process fork, etc.), so flags like --no-sandbox are too
   // late there. Pass everything here; hud.js keeps appendSwitch as
   // belt-and-suspenders for direct `electron hud.js` invocations.
+  //
+  // Principle: kill the protection layer, keep the rendering layer.
+  //   KILL — CORS, CSP, permissions, storage sandbox, Service Workers, etc.
+  //   KEEP — Canvas, WebGL, Web Audio, MediaStream, CSS, DOM.
   const chromiumFlags = [
-    // security theater off — nodeIntegration:true already grants full RCE
+    // protection layer: sandbox & security policy
     "--no-sandbox",
     "--disable-gpu-sandbox",
     "--disable-web-security",
@@ -118,7 +122,13 @@ async function daemon(port) {
     "--ignore-certificate-errors",
     "--disable-popup-blocking",
     "--disable-prompt-on-repost",
-    // strip to bare rendering shell — networking & telemetry
+    // protection layer: storage sandbox
+    "--disable-databases",
+    "--disable-local-storage",
+    "--disable-session-storage",
+    // protection layer: permissions
+    "--deny-permission-prompts",
+    // protection layer: networking & telemetry
     "--disable-sync",
     "--disable-background-networking",
     "--disable-breakpad",
@@ -126,7 +136,7 @@ async function daemon(port) {
     "--disable-client-side-phishing-detection",
     "--no-pings",
     "--metrics-recording-only",
-    // chrome UI & extensions
+    // chrome UI, extensions, spell-check
     "--disable-translate",
     "--disable-default-apps",
     "--disable-extensions",
@@ -134,7 +144,8 @@ async function daemon(port) {
     "--disable-component-extensions-with-background-pages",
     "--no-first-run",
     "--no-default-browser-check",
-    // web APIs we never use
+    "--disable-spell-checking",
+    // web APIs that only exist for untrusted pages
     "--disable-speech-api",
     "--disable-print-preview",
     "--disable-notifications",
@@ -143,11 +154,11 @@ async function daemon(port) {
     "--disable-shared-workers",
     "--disable-remote-fonts",
     "--disable-webrtc-encryption",
-    "--deny-permission-prompts",
-    // renderer & scheduling
+    // renderer scheduling — keep widgets alive
     "--disable-hang-monitor",
     "--disable-ipc-flooding-protection",
     "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
     "--disable-v8-idle-tasks",
     "--disable-back-forward-cache",
     "--disable-lazy-loading",
@@ -156,27 +167,66 @@ async function daemon(port) {
     "--disable-gpu-compositing",
     "--disable-gpu-early-init",
     "--in-process-gpu",
-    // feature flags
+    // renderer internals — trim rasterization overhead
+    "--disable-checker-imaging",
+    "--disable-image-animation-resync",
+    "--disable-composited-antialiasing",
+    "--disable-oop-rasterization",
+    // A/B experiments — kill the entire framework
+    "--force-fieldtrials=*/*",
+    "--disable-field-trial-config",
+    // V8 — cap heap, keep WASM for WebGL widgets
+    "--js-flags=--max-old-space-size=128",
+    // disable-features: protection layer
     "--disable-features=" + [
-      "TranslateUI", "SpareRendererForSitePerProcess", "AutofillServerCommunication",
-      "MediaRouter", "CalculateNativeWinOcclusion",
-      "WebRtcHideLocalIpsWithMdns", "WebUSB", "WebBluetooth", "WebNFC",
-      "IdleDetection", "PeriodicBackgroundSync", "BackgroundFetch",
-      "NavigationPredictor", "Prerender2", "PrefetchProxy",
-      "OptimizationHints", "OptimizationGuideFetching", "OptimizationGuideModelDownloading",
-      "OnDeviceWebSpeech", "PrivacySandboxAdsAPIs", "InterestCohortAPI", "BrowsingTopics",
-      "TrustTokens", "FedCm", "SignedExchange", "WebPayments",
-      "SafeBrowsing", "SafeBrowsingEnhancedProtection", "HeavyAdIntervention",
-      "TextFragmentAnchor", "SpeculativeServiceWorkerWarmUp", "ServiceWorkerAutoPreload",
-      "UseEcoQoSForBackgroundProcess", "AutofillEnableAccountWalletStorage",
-      "GlobalMediaControls", "GlobalMediaControlsForCast",
-      "LiveCaption", "LensOverlay", "OverscrollHistoryNavigation",
+      // security policy
       "BlockInsecurePrivateNetworkRequests", "IsolateOrigins",
       "CrossOriginOpenerPolicy", "CrossOriginEmbedderPolicy",
-      "WebAuthentication", "SecurePaymentConfirmation",
+      "CrossOriginIsolation", "OriginIsolation",
+      "MixedContentAutoupgrade", "CertificateTransparencyComponentUpdater",
+      // storage & caching
+      "CacheStorage", "BackgroundSync", "PeriodicBackgroundSync", "BackgroundFetch",
+      "FileSystemAccessAPI", "StorageBuckets", "CookieStore",
+      "CookieDeprecationFacilitatedTesting",
+      // service workers
+      "ServiceWorkerAutoPreload", "SpeculativeServiceWorkerWarmUp",
+      // credentials & identity
+      "AutofillServerCommunication", "AutofillCreditCardAuthentication",
+      "AutofillEnableAccountWalletStorage",
+      "WebAuthentication", "SecurePaymentConfirmation", "WebPayments",
+      "FedCm", "WebOTP", "SignedExchange", "TrustTokens",
+      // privacy sandbox
+      "PrivacySandboxAdsAPIs", "InterestCohortAPI", "BrowsingTopics",
+      // safe browsing
+      "SafeBrowsing", "SafeBrowsingEnhancedProtection", "HeavyAdIntervention",
+      // navigation & preloading
+      "NavigationPredictor", "Prerender2", "PrefetchProxy",
+      "SpareRendererForSitePerProcess", "BackForwardCache",
+      "TextFragmentAnchor", "OverscrollHistoryNavigation",
+      // chrome features
+      "TranslateUI", "MediaRouter", "CalculateNativeWinOcclusion",
+      "OptimizationHints", "OptimizationGuideFetching", "OptimizationGuideModelDownloading",
+      "UseEcoQoSForBackgroundProcess", "ReduceUserAgentMinorVersion",
+      "LensOverlay", "LiveCaption",
+      "GlobalMediaControls", "GlobalMediaControlsForCast",
+      // web APIs with no HUD use case
+      "OnDeviceWebSpeech", "WebUSB", "WebBluetooth", "WebNFC",
+      "IdleDetection", "SharedArrayBuffer", "Portals", "DirectSockets",
+      "WindowPlacement", "ContactsManager", "ContentIndex",
+      // media protection (not playback)
+      "MediaSession", "MediaEngagement",
+      "AutoPictureInPicture", "MediaCapabilities",
+      "SurfaceCapture", "CapturedSurfaceControl",
     ].join(","),
-    // blink feature kills
-    "--disable-blink-features=NetworkInformation,BatteryStatus,WebShare,DigitalGoods",
+    // disable-blink-features: protection/irrelevant
+    // Keep: Canvas, WebGL, Web Audio, MediaStream, CSS, ResizeObserver
+    "--disable-blink-features=" + [
+      "NetworkInformation", "BatteryStatus", "WebShare", "DigitalGoods",
+      "Gamepad", "ScreenOrientation", "WakeLock",
+      "Bluetooth", "Serial", "HID",
+      "StorageAccessAPI", "TopicsAPI",
+      "ComputePressure",
+    ].join(","),
   ];
 
   // Spawn Electron with --remote-debugging-pipe (no TCP port)

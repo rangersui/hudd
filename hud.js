@@ -8,10 +8,26 @@ const os = require("os");
 if (process.env.HUDD_CDP_PORT) {
   app.commandLine.appendSwitch("remote-debugging-port", process.env.HUDD_CDP_PORT);
 }
-// ── All security theater off — nodeIntegration:true already grants full RCE ──
+// ══════════════════════════════════════════════════════════════════
+// Scorched earth: kill the protection layer, keep the rendering layer.
+//
+//   KILL  — anything that exists because browsers don't trust web pages:
+//           CORS, CSP, permissions, storage sandbox, Service Workers,
+//           certificate checks, mixed content, cookie policy, etc.
+//
+//   KEEP  — anything that IS the rendering engine:
+//           Canvas, WebGL, Web Audio, MediaStream, CSS animations,
+//           ResizeObserver, <video>/<audio>, requestAnimationFrame.
+//
+// nodeIntegration:true already grants full RCE. Every "security" feature
+// is pure dead weight — memory, startup time, code paths never taken.
+//
 // NOTE: bin/hudd.js passes these on the real command line (required for
 // pre-init flags like --no-sandbox whose checks run before JS loads).
 // appendSwitch below is belt-and-suspenders for direct `electron hud.js`.
+// ══════════════════════════════════════════════════════════════════
+
+// ── Protection layer: sandbox & security policy ──
 app.commandLine.appendSwitch("no-sandbox");
 app.commandLine.appendSwitch("disable-gpu-sandbox");
 app.commandLine.appendSwitch("disable-web-security");
@@ -26,8 +42,19 @@ app.commandLine.appendSwitch("disable-prompt-on-repost");
 app.disableHardwareAcceleration();
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
 
-// ── Strip Chromium to a bare rendering shell ──
-// networking & telemetry
+// ── Protection layer: storage sandbox ──
+// require('fs') is storage. require('better-sqlite3') is the database.
+// Browser storage exists because web pages can't touch the filesystem.
+app.commandLine.appendSwitch("disable-databases");
+app.commandLine.appendSwitch("disable-local-storage");
+app.commandLine.appendSwitch("disable-session-storage");
+
+// ── Protection layer: permissions & credentials ──
+// Permissions exist to ask "can this site use your camera?" — widgets
+// use navigator.mediaDevices directly (rendering layer) or require().
+app.commandLine.appendSwitch("deny-permission-prompts");
+
+// ── Protection layer: networking & telemetry ──
 app.commandLine.appendSwitch("disable-sync");
 app.commandLine.appendSwitch("disable-background-networking");
 app.commandLine.appendSwitch("disable-breakpad");
@@ -35,7 +62,8 @@ app.commandLine.appendSwitch("disable-domain-reliability");
 app.commandLine.appendSwitch("disable-client-side-phishing-detection");
 app.commandLine.appendSwitch("no-pings");
 app.commandLine.appendSwitch("metrics-recording-only");
-// chrome UI & extensions
+
+// ── Chrome UI, extensions, spell-check — not a browser ──
 app.commandLine.appendSwitch("disable-translate");
 app.commandLine.appendSwitch("disable-default-apps");
 app.commandLine.appendSwitch("disable-extensions");
@@ -43,7 +71,9 @@ app.commandLine.appendSwitch("disable-component-update");
 app.commandLine.appendSwitch("disable-component-extensions-with-background-pages");
 app.commandLine.appendSwitch("no-first-run");
 app.commandLine.appendSwitch("no-default-browser-check");
-// web APIs we never use
+app.commandLine.appendSwitch("disable-spell-checking");
+
+// ── Protection layer: web APIs that only exist for untrusted pages ──
 app.commandLine.appendSwitch("disable-speech-api");
 app.commandLine.appendSwitch("disable-print-preview");
 app.commandLine.appendSwitch("disable-notifications");
@@ -52,42 +82,87 @@ app.commandLine.appendSwitch("disable-remote-playback-api");
 app.commandLine.appendSwitch("disable-shared-workers");
 app.commandLine.appendSwitch("disable-remote-fonts");
 app.commandLine.appendSwitch("disable-webrtc-encryption");
-app.commandLine.appendSwitch("deny-permission-prompts");
-// renderer & scheduling
+
+// ── Renderer scheduling — keep widgets alive ──
 app.commandLine.appendSwitch("disable-hang-monitor");
 app.commandLine.appendSwitch("disable-ipc-flooding-protection");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-v8-idle-tasks");
 app.commandLine.appendSwitch("disable-back-forward-cache");
 app.commandLine.appendSwitch("disable-lazy-loading");
 app.commandLine.appendSwitch("disable-scroll-to-text-fragment");
-// GPU (already off, belt-and-suspenders)
+
+// ── GPU — already off via disableHardwareAcceleration ──
 app.commandLine.appendSwitch("disable-gpu-compositing");
 app.commandLine.appendSwitch("disable-gpu-early-init");
 app.commandLine.appendSwitch("in-process-gpu");
-// feature flags — one call, everything merged
+
+// ── Renderer internals — trim rasterization overhead ──
+app.commandLine.appendSwitch("disable-checker-imaging");
+app.commandLine.appendSwitch("disable-image-animation-resync");
+app.commandLine.appendSwitch("disable-composited-antialiasing");
+app.commandLine.appendSwitch("disable-oop-rasterization");
+
+// ── A/B experiments — kill the entire framework ──
+app.commandLine.appendSwitch("force-fieldtrials", "*/*");
+app.commandLine.appendSwitch("disable-field-trial-config");
+
+// ── V8 — cap heap, keep WASM for WebGL widgets ──
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=128");
+
+// ── disable-features: protection layer features ──
 app.commandLine.appendSwitch("disable-features", [
-  "TranslateUI", "SpareRendererForSitePerProcess", "AutofillServerCommunication",
-  "MediaRouter", "CalculateNativeWinOcclusion",
-  "WebRtcHideLocalIpsWithMdns", "WebUSB", "WebBluetooth", "WebNFC",
-  "IdleDetection", "PeriodicBackgroundSync", "BackgroundFetch",
-  "NavigationPredictor", "Prerender2", "PrefetchProxy",
-  "OptimizationHints", "OptimizationGuideFetching", "OptimizationGuideModelDownloading",
-  "OnDeviceWebSpeech", "PrivacySandboxAdsAPIs", "InterestCohortAPI", "BrowsingTopics",
-  "TrustTokens", "FedCm", "SignedExchange", "WebPayments",
-  "SafeBrowsing", "SafeBrowsingEnhancedProtection", "HeavyAdIntervention",
-  "TextFragmentAnchor", "SpeculativeServiceWorkerWarmUp", "ServiceWorkerAutoPreload",
-  "UseEcoQoSForBackgroundProcess", "AutofillEnableAccountWalletStorage",
-  "GlobalMediaControls", "GlobalMediaControlsForCast",
-  "LiveCaption", "LensOverlay", "OverscrollHistoryNavigation",
+  // security policy
   "BlockInsecurePrivateNetworkRequests", "IsolateOrigins",
   "CrossOriginOpenerPolicy", "CrossOriginEmbedderPolicy",
-  "WebAuthentication", "SecurePaymentConfirmation",
+  "CrossOriginIsolation", "OriginIsolation",
+  "MixedContentAutoupgrade", "CertificateTransparencyComponentUpdater",
+  // storage & caching (require('fs') is storage)
+  "CacheStorage", "BackgroundSync", "PeriodicBackgroundSync", "BackgroundFetch",
+  "FileSystemAccessAPI", "StorageBuckets", "CookieStore",
+  "CookieDeprecationFacilitatedTesting",
+  // service workers (local files don't need offline cache)
+  "ServiceWorkerAutoPreload", "SpeculativeServiceWorkerWarmUp",
+  // credentials & identity (no login forms, no autofill)
+  "AutofillServerCommunication", "AutofillCreditCardAuthentication",
+  "AutofillEnableAccountWalletStorage",
+  "WebAuthentication", "SecurePaymentConfirmation", "WebPayments",
+  "FedCm", "WebOTP", "SignedExchange", "TrustTokens",
+  // privacy sandbox (not a browser)
+  "PrivacySandboxAdsAPIs", "InterestCohortAPI", "BrowsingTopics",
+  // safe browsing (we trust all code — it's ours)
+  "SafeBrowsing", "SafeBrowsingEnhancedProtection", "HeavyAdIntervention",
+  // navigation & preloading (single-page widgets, no URL navigation)
+  "NavigationPredictor", "Prerender2", "PrefetchProxy",
+  "SpareRendererForSitePerProcess", "BackForwardCache",
+  "TextFragmentAnchor", "OverscrollHistoryNavigation",
+  // chrome features (not a browser)
+  "TranslateUI", "MediaRouter", "CalculateNativeWinOcclusion",
+  "OptimizationHints", "OptimizationGuideFetching", "OptimizationGuideModelDownloading",
+  "UseEcoQoSForBackgroundProcess", "ReduceUserAgentMinorVersion",
+  "LensOverlay", "LiveCaption",
+  "GlobalMediaControls", "GlobalMediaControlsForCast",
+  // web APIs with no HUD use case (Node equivalents or irrelevant)
+  "OnDeviceWebSpeech", "WebUSB", "WebBluetooth", "WebNFC",
+  "IdleDetection", "SharedArrayBuffer", "Portals", "DirectSockets",
+  "WindowPlacement", "ContactsManager", "ContentIndex",
+  // media protection (not playback — keep MediaStream, Web Audio, <video>)
+  "MediaSession", "MediaEngagement",
+  "AutoPictureInPicture", "MediaCapabilities",
+  "SurfaceCapture", "CapturedSurfaceControl",
 ].join(","));
-// blink feature kills
-app.commandLine.appendSwitch("disable-blink-features",
-  "NetworkInformation,BatteryStatus,WebShare,DigitalGoods"
-);
+
+// ── disable-blink-features: protection/irrelevant blink features ──
+// Keep: Canvas, WebGL, Web Audio, MediaStream, CSS, ResizeObserver,
+//       IntersectionObserver — these ARE the rendering engine.
+app.commandLine.appendSwitch("disable-blink-features", [
+  "NetworkInformation", "BatteryStatus", "WebShare", "DigitalGoods",
+  "Gamepad", "ScreenOrientation", "WakeLock",
+  "Bluetooth", "Serial", "HID",
+  "StorageAccessAPI", "TopicsAPI",
+  "ComputePressure",
+].join(","));
 
 const widgets = {};  // id -> BrowserWindow
 const _log = fs.createWriteStream(path.join(__dirname, "hud.log"), { flags: "w" });
@@ -384,6 +459,7 @@ app.on("second-instance", (_e, argv) => parseFilesFromArgv(argv));
 const HOOKS_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), "hudd", "hooks");
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);  // no default menu — saves memory, right-click still works
   loadDir(__dirname, { prefix: null, defaultOnNoMeta: false });
 
   fs.mkdirSync(HOOKS_DIR, { recursive: true });
