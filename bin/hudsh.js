@@ -58,14 +58,14 @@ async function cmdRun(name, code) {
 }
 
 async function cmdKill(name) {
-  const port = getPort();
-  const token = getToken();
-  const targets = await cdpList(port);
+  const targets = await cdpList();
   const page = findPage(name, targets);
   if (!page) {
     console.error(`ERR page '${name}' not found`);
     process.exit(1);
   }
+  const port = getPort();
+  const token = getToken();
   return new Promise((resolve, reject) => {
     http
       .get({
@@ -115,20 +115,23 @@ async function cmdStatus(name) {
 }
 
 async function cmdAttach(name) {
-  const port = getPort();
-  const token = getToken();
-  const targets = await cdpList(port);
+  const targets = await cdpList();
   const page = findPage(name, targets);
   if (!page) {
     console.error(`ERR page '${name}' not found`);
     process.exit(1);
   }
   // DevTools URL with token for WebSocket auth
+  const port = getPort();
+  const token = getToken();
   const wsAddr = `127.0.0.1:${port}/devtools/page/${page.id}?token=${token}`;
   const url = `devtools://devtools/bundled/inspector.html?ws=${wsAddr}`;
   console.log(url);
   const { exec } = require("child_process");
-  exec(`start "" "${url}"`);
+  const open = process.platform === "win32" ? `start "" "${url}"`
+             : process.platform === "darwin" ? `open "${url}"`
+             : `xdg-open "${url}"`;
+  exec(open);
 }
 
 // ── CLI ──
@@ -139,7 +142,7 @@ if (!args.length || args[0] === "-h" || args[0] === "--help") {
   process.exit(0);
 }
 if (args[0] === "-V" || args[0] === "--version") {
-  console.log(`hudd ${VERSION}`);
+  console.log(`hudsh ${VERSION}`);
   process.exit(0);
 }
 

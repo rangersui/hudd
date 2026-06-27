@@ -192,6 +192,9 @@ const OVERLAY_DEFAULTS = {
 function readMeta(filepath) {
   try {
     const head = fs.readFileSync(filepath, "utf-8").slice(0, 2000);
+    // Convention: single-quote wrapper. JSON uses " internally, so
+    // content='{"width":300}' is the only correct form. Double-quote
+    // wrapper is impossible — " inside JSON would close the HTML attribute.
     const m = head.match(/<meta\s+name="hudd"\s+content='([^']+)'/);
     return m ? JSON.parse(m[1]) : null;
   } catch { return null; }
@@ -296,7 +299,6 @@ function createWidget(id, filepath, meta, { untrusted = false } = {}) {
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   }
 
-  win.setSkipTaskbar(d.skipTaskbar);
   if (d.clickThrough) win.setIgnoreMouseEvents(true, { forward: true });
   if (d.alwaysOnTop) win.setAlwaysOnTop(true, d.level);
 
@@ -319,7 +321,7 @@ function createWidget(id, filepath, meta, { untrusted = false } = {}) {
       }},
       { type: "separator" },
       { label: "Reload", click: () => win.webContents.reload() },
-      { label: "Close", click: () => { win.close(); delete widgets[id]; } },
+      { label: "Close", click: () => win.close() },
     ]).popup();
   });
 
@@ -407,7 +409,7 @@ function handleChange(dir, filename, prefix, { untrusted = false } = {}) {
   const id = prefix + filename.replace(".html", "");
 
   if (!fs.existsSync(filepath)) {
-    if (widgets[id]) { widgets[id].close(); delete widgets[id]; }
+    if (widgets[id]) widgets[id].close();
     return;
   }
 
@@ -476,8 +478,9 @@ if (!gotLock) { app.quit(); return; }
 
 app.on("second-instance", (_e, argv) => parseFilesFromArgv(argv));
 
-const HOOKS_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), "hudd", "hooks");
-const EXTERNAL_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), "hudd", "external");
+const DATA_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), "hudd");
+const HOOKS_DIR = path.join(DATA_DIR, "hooks");
+const EXTERNAL_DIR = path.join(DATA_DIR, "external");
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);  // no default menu — saves memory, right-click still works
@@ -515,7 +518,10 @@ ipcMain.on("minimize-widget", (_e, id) => {
 
 ipcMain.on("close-widget", (_e, id) => {
   log(`IPC close-widget: ${id}`);
-  if (widgets[id]) { widgets[id].close(); delete widgets[id]; broadcast("widget-closed", id); }
+  const win = widgets[id];
+  if (!win) return;
+  win.once("closed", () => broadcast("widget-closed", id));
+  win.close();
 });
 
 ipcMain.on("restore-widget", (_e, id) => {
@@ -618,9 +624,14 @@ ipcMain.on("start-drag", (e, { id, mouseX, mouseY }) => {
   if (!win) return;
   const [wx, wy] = win.getPosition();
   const move = (_e2, { x, y }) => win.setPosition(wx + x - mouseX, wy + y - mouseY);
-  const up = () => { ipcMain.removeListener("drag-move", move); ipcMain.removeListener("drag-end", up); };
+  const cleanup = () => {
+    ipcMain.removeListener("drag-move", move);
+    ipcMain.removeListener("drag-end", cleanup);
+  };
   ipcMain.on("drag-move", move);
-  ipcMain.on("drag-end", up);
+  ipcMain.on("drag-end", cleanup);
+  // Guard: if window closes mid-drag, clean up listeners
+  win.once("closed", cleanup);
 });
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
