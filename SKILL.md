@@ -30,6 +30,18 @@ Every window is also a full Node.js process. `require('fs')` and `document.getEl
 
 The runtime is persistent — variables, connections, servers, timers survive across `hudsh run` calls. The filesystem is deployment — write a file, app appears; delete, gone. No build, no restart.
 
+hudd is a compositor, not an application. It doesn't know what runs on top of it. An editor (monaco-editor), a terminal (xterm.js), a dashboard, a music player — each is one HTML file, dropped into the same hooks directory, running side by side, communicating via IPC. The compositor just renders whatever you put there.
+
+But unlike a traditional compositor (Wayland only composites — you can't ask it to think), hudd has three identities:
+
+| Identity | What it does | Entry point |
+|----------|-------------|-------------|
+| Compositor | HTML appears → window appears | hooks directory |
+| Runtime | Persistent stateful Node.js, accumulates knowledge across calls | `hudsh run "code"` / hooks `.js` |
+| Shell | Reach into any live window from outside, drive UI from scripts or cron | `hudsh run <page> "code"` |
+
+The compositor layer is declarative — files on disk determine what's running. Delete and re-drop, same result. `git clone` your hooks to another machine, same desktop appears. The runtime layer is imperative — main context accumulates state from every `hudsh run`. Restart the daemon and the declarative layer restores from files, the imperative layer resets to zero.
+
 ## Choosing a runtime
 
 One daemon, three ways to run code. Pick by whether the task needs a DOM and how it should deploy:
@@ -58,6 +70,39 @@ One daemon, three ways to run code. Pick by whether the task needs a DOM and how
 ```
 
 When in doubt: if you need `document`, it's a widget. If you don't, it's main.
+
+### Development patterns
+
+**API calls** — `require()` directly. No CORS, no proxy, no fetch workarounds. `nodeIntegration: true` means the widget is a native HTTP client, not a browser tab:
+
+```javascript
+const axios = require('axios');
+const data = await axios.get('https://api.example.com/data', {
+  headers: { Authorization: `Bearer ${process.env.API_TOKEN}` }
+});
+document.getElementById('result').textContent = JSON.stringify(data.data);
+```
+
+**OAuth / external login** — don't load the login page in a widget (its JS would have `require()`). Open the system browser, catch the callback on localhost. This is the standard pattern for native desktop apps:
+
+```javascript
+require('child_process').exec('start https://accounts.google.com/o/oauth2/auth?redirect_uri=http://localhost:8888');
+require('http').createServer((req, res) => {
+  const code = new URL(req.url, 'http://localhost').searchParams.get('code');
+  res.end('OK — you can close this tab');
+  // exchange code for token, store with require('fs')
+}).listen(8888);
+```
+
+**Rendering untrusted HTML** — sanitize before inserting into DOM. Strip all executable JS so `require()` is unreachable:
+
+```javascript
+const DOMPurify = require('dompurify');
+element.innerHTML = DOMPurify.sanitize(untrustedHTML);
+// all <script>, onerror, onclick stripped — static content only
+```
+
+**External web pages** — don't load in a widget. Open in the system browser, or use `webviewTag: true` for an embedded sandboxed browser (note: some Chromium storage flags may affect webview sessions).
 
 ## Anatomy of a widget
 
@@ -310,6 +355,12 @@ hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ El
 - **Renderer**: `nodeIntegration: true`, `sandbox: false` — treat like SSH into a Node.js + DOM runtime
 
 You are responsible for what runs inside. Don't `<script src="https://...">` from external CDNs. Don't load untrusted HTML. If you want to browse the web, use a real browser — hudd is a runtime for your own code.
+
+### When not to use hudd
+
+When the task requires loading untrusted external content. hudd has zero renderer isolation — every widget has full filesystem, network, and process access. That's the feature, not a bug. But it means untrusted code has full system access the moment it runs.
+
+If the user needs to display an external URL, open it in a real browser. If someone gives you an HTML file you haven't reviewed, put it in the external directory — not hooks. hudd is not a browser. A browser protects you from code you didn't choose to trust. hudd runs code you did.
 
 ## Environment variables
 

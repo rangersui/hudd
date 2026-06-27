@@ -25,6 +25,8 @@ hudd:         HTML file appears → Chromium renders it → daemon composites
 
 The difference: your rendering layer is the world's best layout engine, animation engine, and text shaper — not a pixel buffer. You declare what you want, it draws. And you can `hudsh run` into any window and modify it live.
 
+hudd is a compositor, not an application. It doesn't know what runs on top of it — an editor, a terminal, a dashboard, a monitor are each one HTML file in the same directory. Unlike a traditional compositor, hudd is also a runtime (`hudsh run "code"` — persistent, stateful) and a shell (`hudsh run <page> "code"` — reach into any live window from outside).
+
 ## Two runtimes
 
 - **Main process** (`hudsh run "code"`): persistent `vm.createContext` — pure Node.js, no DOM. const/let/var all persist.
@@ -61,6 +63,8 @@ hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ El
 ```
 
 `nodeIntegration: true`, `sandbox: false` — treat like SSH into a Node.js + DOM runtime. You are responsible for what runs inside. Don't `<script src="https://...">` from external CDNs. If you want to browse the web, use a real browser — hudd is a runtime for your own code.
+
+**When not to use hudd**: when you need to load untrusted external content. A browser protects you from code you didn't choose to trust. hudd runs code you did. There is no middle ground. For OAuth, open the system browser and catch the callback on localhost — the standard pattern for native desktop apps.
 
 ## hudsh
 
