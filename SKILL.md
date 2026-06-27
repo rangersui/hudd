@@ -29,22 +29,49 @@ Each page has its own DOM, JS context, and `window` object. `hudsh run <page>` e
 
 ## Metadata
 
-Widgets declare their own layout via a meta tag in `<head>`:
+Widgets declare their own layout and behavior via a meta tag in `<head>`. Every field is optional — undeclared fields fall through to runtime defaults. For `type: "overlay"`, overlay-specific defaults are layered on first.
 
 ```html
 <meta name="hudd" content='{"width":400,"height":300,"position":"bottom-left","resizable":true}'>
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Widget ID (default: filename without .html) |
-| `type` | `"overlay"` | Fullscreen click-through mode |
-| `width`, `height` | number | Window size in px |
-| `position` | string | `top-left`, `top-right`, `bottom-left`, `bottom-right`, `bottom-center`, `center` |
-| `x`, `y` | number | Exact position (overrides position) |
-| `resizable` | boolean | Allow resize |
-| `trackPosition` | boolean | Emit `position-changed` on move/resize |
-| `webviewTag` | boolean | Enable `<webview>` tag |
+### Layout fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `id` | filename | Widget ID |
+| `type` | normal | `"overlay"` → fullscreen click-through |
+| `width`, `height` | 360×260 | Window size px (overlay: fullscreen) |
+| `position` | cascade | `top-left` `top-right` `bottom-left` `bottom-right` `bottom-center` `center` |
+| `x`, `y` | from position | Exact position (overrides position) |
+| `pad` | 30 | Edge padding for position calculation |
+| `inset` | 1 (overlay) | Overlay edge inset for taskbar compat |
+
+### Window chrome fields
+
+| Field | Default | Overlay | Description |
+|-------|---------|---------|-------------|
+| `transparent` | true | true | Transparent background |
+| `frame` | false | false | Show window frame |
+| `hasShadow` | false | false | Window shadow |
+| `roundedCorners` | false | false | Rounded corners |
+| `backgroundColor` | `#00000000` | — | Background color |
+| `windowType` | `toolbar` | — | Electron window type |
+| `minWidth`, `minHeight` | 200×120 | — | Min size when resizable |
+
+### Behavior fields
+
+| Field | Default | Overlay | Description |
+|-------|---------|---------|-------------|
+| `resizable` | false | false | Allow resize |
+| `movable` | true | false | Allow move |
+| `focusable` | true | false | Can receive focus |
+| `clickThrough` | false | true | Ignore mouse (with forward) |
+| `alwaysOnTop` | true | true | Stay on top |
+| `level` | `pop-up-menu` | `screen-saver` | alwaysOnTop level |
+| `skipTaskbar` | true | true | Hide from taskbar |
+| `trackPosition` | false | — | Emit `position-changed` on move/resize |
+| `webviewTag` | false | — | Enable `<webview>` tag |
 
 No meta tag → skipped in app dir, loaded with defaults in hooks dir.
 
@@ -73,9 +100,8 @@ Write a file → widget appears. Modify → reloads. Delete → closes. Any exte
 ### Common rules for both
 
 - `-webkit-app-region: drag` on the draggable element
-- `background: transparent` for see-through
 - `nodeIntegration: true` — `require('fs')`, `require('os')`, etc. work
-- Widgets are always-on-top, frameless, skip-taskbar
+- All window properties (transparent, frame, shadow, alwaysOnTop, etc.) are defaults — meta tag overrides any of them
 
 ### Example widget
 
@@ -187,9 +213,16 @@ hudsh kill <page>          # close a page
 hudsh attach <page>        # open Chrome DevTools for a page
 ```
 
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HUDD_CDP_PORT` | `9500` | Chrome DevTools Protocol port |
+| `HUDD_RESTORE_KEY` | `F10` | Global shortcut to restore all hidden widgets |
+
 ## Shortcuts
 
-- **F10** — restore all hidden widgets
+- **Restore key** (default F10, configurable via `HUDD_RESTORE_KEY`) — restore all hidden widgets
 - **Right-click** any widget → context menu with Inspect / DevTools / Reload / Close
 
 ## Debugging

@@ -3,7 +3,8 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
-app.commandLine.appendSwitch("remote-debugging-port", "9500");
+const CDP_PORT = process.env.HUDD_CDP_PORT || "9500";
+app.commandLine.appendSwitch("remote-debugging-port", CDP_PORT);
 app.disableHardwareAcceleration();
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
 
@@ -71,6 +72,23 @@ const widgets = {};  // id -> BrowserWindow
 const _log = fs.createWriteStream(path.join(__dirname, "hud.log"), { flags: "w" });
 function log(...args) { _log.write(new Date().toISOString() + " " + args.join(" ") + "\n"); }
 
+// ── Configurable defaults — meta tags override any of these ──
+const DEFAULTS = {
+  defaultWidth: 360, defaultHeight: 260, pad: 30,
+  transparent: true, frame: false, hasShadow: false,
+  roundedCorners: false, backgroundColor: "#00000000",
+  windowType: "toolbar",
+  alwaysOnTop: true, skipTaskbar: true,
+  resizable: false, movable: true, focusable: true,
+  level: "pop-up-menu",
+  minWidth: 200, minHeight: 120,
+};
+
+const OVERLAY_DEFAULTS = {
+  focusable: false, resizable: false, movable: false,
+  level: "screen-saver", clickThrough: true,
+};
+
 // ════════════════════════════════════════════
 // METADATA
 // ════════════════════════════════════════════
@@ -86,36 +104,37 @@ function readMeta(filepath) {
 function resolveMeta(meta) {
   const display = screen.getPrimaryDisplay();
 
-  // overlay — fullscreen, inset 1px for taskbar auto-hide
+  // overlay — fullscreen, inset for taskbar auto-hide
   if (meta.type === "overlay") {
+    const inset = meta.inset != null ? meta.inset : 1;
     const { x, y, width, height } = display.bounds;
-    return { ...meta, x: x + 1, y: y + 1, width: width - 2, height: height - 2 };
+    return { ...meta, x: x + inset, y: y + inset, width: width - inset * 2, height: height - inset * 2 };
   }
 
-  // normal widget
+  // normal widget — all values from DEFAULTS, meta overrides
   const { width: sw, height: sh } = display.workAreaSize;
-  const w = meta.width || 360;
-  const h = meta.height || 260;
+  const w = meta.width || DEFAULTS.defaultWidth;
+  const h = meta.height || DEFAULTS.defaultHeight;
+  const pad = meta.pad != null ? meta.pad : DEFAULTS.pad;
   let x, y;
 
   if (meta.x != null && meta.y != null) {
     x = meta.x; y = meta.y;
   } else if (meta.position) {
-    const pad = 30;
     switch (meta.position) {
-      case "top-left":       x = 50;                         y = pad;                         break;
+      case "top-left":       x = pad;                        y = pad;                         break;
       case "top-right":      x = sw - w - pad;               y = pad;                         break;
-      case "bottom-left":    x = 50;                         y = sh - h - pad;                break;
+      case "bottom-left":    x = pad;                        y = sh - h - pad;                break;
       case "bottom-right":   x = sw - w - pad;               y = sh - h - pad;                break;
       case "bottom-center":  x = Math.round((sw - w) / 2);   y = sh - h - pad;                break;
       case "center":         x = Math.round((sw - w) / 2);   y = Math.round((sh - h) / 2);   break;
       default:               x = sw - w - pad;               y = sh - h - pad;
     }
   } else {
-    // cascade: offset from top-right based on how many widgets exist
+    // cascade from top-right
     const n = Object.keys(widgets).length;
-    x = sw - w - 30 - (n % 5) * 30;
-    y = 260 + (n % 10) * 30;
+    x = sw - w - pad - (n % 5) * pad;
+    y = pad + (n % 10) * pad;
   }
 
   return { ...meta, width: w, height: h, x, y };
@@ -131,24 +150,27 @@ function createWidget(id, filepath, meta) {
   const m = resolveMeta(meta);
   const ov = m.type === "overlay";
 
+  // layer: DEFAULTS → overlay (if applicable) → meta declaration
+  const d = { ...DEFAULTS, ...(ov ? OVERLAY_DEFAULTS : {}), ...m };
+
   const win = new BrowserWindow({
     width: m.width, height: m.height,
     x: m.x, y: m.y,
-    transparent: true,
-    frame: false,
+    transparent: d.transparent,
+    frame: d.frame,
     show: false,
-    focusable: !ov,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: !ov && !!m.resizable,
-    movable: !ov,
-    hasShadow: false,
-    thickFrame: !ov && !!m.resizable,
-    type: "toolbar",
-    backgroundColor: "#00000000",
-    roundedCorners: false,
-    minWidth: m.resizable ? 200 : undefined,
-    minHeight: m.resizable ? 120 : undefined,
+    focusable: d.focusable,
+    alwaysOnTop: d.alwaysOnTop,
+    skipTaskbar: d.skipTaskbar,
+    resizable: d.resizable,
+    movable: d.movable,
+    hasShadow: d.hasShadow,
+    thickFrame: d.resizable,
+    type: d.windowType,
+    backgroundColor: d.backgroundColor,
+    roundedCorners: d.roundedCorners,
+    minWidth: d.resizable ? d.minWidth : undefined,
+    minHeight: d.resizable ? d.minHeight : undefined,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -157,13 +179,9 @@ function createWidget(id, filepath, meta) {
     },
   });
 
-  win.setSkipTaskbar(true);
-  if (ov) {
-    win.setIgnoreMouseEvents(true, { forward: true });
-    win.setAlwaysOnTop(true, "screen-saver");
-  } else {
-    win.setAlwaysOnTop(true, "pop-up-menu");
-  }
+  win.setSkipTaskbar(d.skipTaskbar);
+  if (d.clickThrough) win.setIgnoreMouseEvents(true, { forward: true });
+  if (d.alwaysOnTop) win.setAlwaysOnTop(true, d.level);
 
   win.loadFile(filepath, { query: { id } });
   widgets[id] = win;
@@ -351,7 +369,8 @@ app.whenReady().then(() => {
 
   parseFilesFromArgv(process.argv);
 
-  globalShortcut.register("F10", () => {
+  const restoreKey = process.env.HUDD_RESTORE_KEY || "F10";
+  globalShortcut.register(restoreKey, () => {
     for (const [id, win] of Object.entries(widgets)) {
       if (!win.isDestroyed() && !win.isVisible()) {
         win.show();
@@ -473,4 +492,4 @@ ipcMain.on("start-drag", (e, { id, mouseX, mouseY }) => {
 });
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
-app.on("window-all-closed", () => app.quit());
+app.on("window-all-closed", () => { /* daemon stays alive — widgets arrive via hooks, CLI, or IPC */ });
