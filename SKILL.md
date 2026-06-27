@@ -172,6 +172,8 @@ All fields optional. Content must use single-quote wrapper: `content='...'`.
 
 ### Node.js (full access)
 
+All built-in modules work:
+
 ```javascript
 const fs = require('fs');                    // filesystem
 const os = require('os');                    // system info
@@ -180,8 +182,19 @@ const path = require('path');                // path manipulation
 const http = require('http');                // HTTP server/client
 const net = require('net');                  // TCP sockets
 const crypto = require('crypto');            // cryptography
-// Any Node.js built-in or npm package installed in hudd's node_modules
 ```
+
+npm packages work too — `require()` resolves from the widget file's directory upward. For hooks widgets, install packages in the hudd data directory (the parent of hooks/):
+
+```bash
+# Windows
+cd %LOCALAPPDATA%\hudd && npm install better-sqlite3
+
+# POSIX
+cd ~/hudd && npm install better-sqlite3
+```
+
+Then `require('better-sqlite3')` works in any hooks widget. App dir widgets resolve from hudd's own `node_modules/`.
 
 ### DOM (full browser engine)
 
