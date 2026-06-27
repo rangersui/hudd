@@ -116,6 +116,10 @@ hudsh run <page> "code" # evaluate JS in a page
 
 Stripped to bare rendering shell. All unnecessary features disabled (sync, translate, extensions, speech, print, WebRTC, notifications, safe browsing, privacy sandbox, etc.). ~65MB memory footprint.
 
+## Persistent runtime
+
+Each widget is a long-lived Node.js process. `window.*` variables, `require()`'d modules, connections, servers, timers all persist across `hudsh run` calls. `hudsh run` is a function call into a live runtime, not a fresh script.
+
 ## Conventions
 
 - `nodeIntegration: true`, `contextIsolation: false`, `sandbox: false` — full Node.js in renderer

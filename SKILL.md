@@ -157,24 +157,31 @@ electron hud.js /path/to/file.html
 hudsh run overlay "require('electron').ipcRenderer.send('open-file', 'C:\\\\path\\\\to\\\\file.html')"
 ```
 
-## Variable persistence
+## Persistent Node.js runtime
 
-`window.x` persists across hudsh calls. `let` and `const` do not.
+Each widget is a long-lived Node.js process with a persistent namespace and a DOM. Variables, connections, servers, timers, imported modules all survive across `hudsh run` calls. The page stays alive until closed or the daemon stops. Think of `hudsh run <page>` as a function call into a live runtime — not a fresh script execution.
 
 ```bash
-hudsh run overlay "window.counter = 0"
-hudsh run overlay "window.counter += 1"
-hudsh run overlay "window.counter"   # 1
+hudsh run work "window.db = require('better-sqlite3')('app.db')"
+# ... 100 calls later ...
+hudsh run work "window.db.prepare('SELECT count(*) FROM users').get()"
+# { 'count(*)': 42 }  — same connection, never closed
 ```
 
-| Syntax | Persists? | Why |
-|--------|-----------|-----|
+### What persists
+
+| What | Persists? | Why |
+|------|-----------|-----|
 | `window.x = 1` | Yes | property on window object |
 | `var x = 1` | Yes | var hoists to window in sloppy mode |
 | `let x = 1` | No | block-scoped to the evaluate call |
 | DOM changes | Yes | the DOM is the page |
+| `require()` modules | Yes | cached in `require.cache` |
+| `setInterval` / `setTimeout` | Yes | event loop keeps running |
+| TCP/WebSocket/HTTP servers | Yes | bound to the process |
+| Spawned child processes | Yes | until explicitly killed |
 
-## Node.js in renderer
+### Node.js in renderer
 
 `nodeIntegration: true`, `contextIsolation: false`, `sandbox: false`. Full Node.js in every page:
 

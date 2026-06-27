@@ -64,6 +64,10 @@ Every window property is configurable via meta: `transparent`, `frame`, `hasShad
 | `HUDD_CDP_PORT` | `9500` | CDP port |
 | `HUDD_RESTORE_KEY` | `F10` | Restore-all shortcut |
 
+## Persistent runtime
+
+Each widget is a long-lived Node.js process. Variables (`window.*`), connections, servers, timers persist across `hudsh run` calls. `hudsh run` is a function call into a live runtime, not a fresh script.
+
 ## Renderer environment
 
 - `nodeIntegration: true` — `require('fs')`, `require('os')` work
