@@ -14,7 +14,7 @@ hudsh run <page> "code" # evaluate JS in a page
 hudd stop               # stop daemon
 ```
 
-hudd is a layer of programmable glass on the desktop. It loads HTML files, reads their `<meta name="hudd">` tag, and creates BrowserWindows accordingly. No widget names are hardcoded — the HTML file IS the widget. Full DOM (canvas, WebGL, SVG, video, CSS animations) + full Node.js (`require('fs')`, `child_process`, `net`) in every page.
+hudd is a layer of programmable transparent glass on the desktop. It loads HTML files, reads their `<meta name="hudd">` tag, and creates BrowserWindows accordingly. No widget names are hardcoded — the HTML file IS the widget. Full DOM (canvas, WebGL, SVG, video, CSS animations) + full Node.js (`require('fs')`, `child_process`, `net`) in every page.
 
 ## Core concept
 

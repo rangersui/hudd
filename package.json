@@ -31,5 +31,8 @@
   "dependencies": {
     "electron": "^42.5.0",
     "ws": "^8.0.0"
+  },
+  "devDependencies": {
+    "rcedit": "^5.0.2"
   }
 }

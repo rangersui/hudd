@@ -59,10 +59,35 @@ function writeDaemonMeta(port, token, pid) {
 // ── Daemon ──────────────────────────────────────────────
 
 async function daemon(port) {
-  const electronPath = require("electron");
+  let electronPath = require("electron");
   const token = crypto.randomBytes(16).toString("hex");
 
   secureDir(DAEMON_DIR);
+
+  // Rename electron.exe → hudd.exe so Task Manager shows "hudd"
+  if (process.platform === "win32") {
+    const huddExe = path.join(path.dirname(electronPath), "hudd.exe");
+    if (!fs.existsSync(huddExe)) {
+      fs.copyFileSync(electronPath, huddExe);
+      // Patch PE resources so Task Manager shows "hudd" not "Electron"
+      try {
+        const { rcedit } = require("rcedit");
+        const icoPath = path.join(APP_DIR, "icons", "icon.ico");
+        const opts = {
+          "version-string": {
+            FileDescription: "hudd",
+            ProductName: "hudd",
+            InternalName: "hudd",
+          },
+        };
+        if (fs.existsSync(icoPath)) opts.icon = icoPath;
+        await rcedit(huddExe, opts);
+      } catch (e) {
+        console.error(`WARN: rcedit failed: ${e.message} (Task Manager will show "Electron")`);
+      }
+    }
+    electronPath = huddExe;
+  }
 
   // Check for existing daemon
   if (fs.existsSync(DAEMON_JSON)) {

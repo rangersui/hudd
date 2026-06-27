@@ -1,6 +1,10 @@
-# hudd
+<p align="center">
+  <img src="icon.svg" width="128" height="128" alt="hudd">
+</p>
 
-Programmable glass for the desktop. Drop HTML files → widgets appear on screen.
+<h1 align="center">hudd</h1>
+
+<p align="center">Programmable transparent glass for the desktop, with minimal Electron.<br>Only hydrogen.</p>
 
 ```bash
 hudd daemon              # start with auth gateway on :9500
