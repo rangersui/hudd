@@ -1,6 +1,6 @@
 # hudd
 
-Metadata-driven desktop overlay daemon. Drop HTML files → widgets appear on screen.
+Programmable glass for the desktop. Drop HTML files → widgets appear on screen.
 
 ```bash
 hudd daemon              # start Electron + CDP on :9500

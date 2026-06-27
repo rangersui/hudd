@@ -5,6 +5,18 @@ const os = require("os");
 
 const CDP_PORT = process.env.HUDD_CDP_PORT || "9500";
 app.commandLine.appendSwitch("remote-debugging-port", CDP_PORT);
+// ── All security theater off — nodeIntegration:true already grants full RCE ──
+app.commandLine.appendSwitch("no-sandbox");
+app.commandLine.appendSwitch("disable-gpu-sandbox");
+app.commandLine.appendSwitch("disable-web-security");
+app.commandLine.appendSwitch("disable-site-isolation-trials");
+app.commandLine.appendSwitch("disable-site-isolation-for-policy");
+app.commandLine.appendSwitch("allow-running-insecure-content");
+app.commandLine.appendSwitch("allow-file-access-from-files");
+app.commandLine.appendSwitch("allow-insecure-localhost");
+app.commandLine.appendSwitch("ignore-certificate-errors");
+app.commandLine.appendSwitch("disable-popup-blocking");
+app.commandLine.appendSwitch("disable-prompt-on-repost");
 app.disableHardwareAcceleration();
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
 
@@ -62,6 +74,9 @@ app.commandLine.appendSwitch("disable-features", [
   "UseEcoQoSForBackgroundProcess", "AutofillEnableAccountWalletStorage",
   "GlobalMediaControls", "GlobalMediaControlsForCast",
   "LiveCaption", "LensOverlay", "OverscrollHistoryNavigation",
+  "BlockInsecurePrivateNetworkRequests", "IsolateOrigins",
+  "CrossOriginOpenerPolicy", "CrossOriginEmbedderPolicy",
+  "WebAuthentication", "SecurePaymentConfirmation",
 ].join(","));
 // blink feature kills
 app.commandLine.appendSwitch("disable-blink-features",
@@ -175,6 +190,8 @@ function createWidget(id, filepath, meta) {
       nodeIntegration: true,
       contextIsolation: false,
       sandbox: false,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
       webviewTag: !!m.webviewTag,
     },
   });
