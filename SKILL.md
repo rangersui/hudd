@@ -1,6 +1,6 @@
 ---
 name: hudd
-description: A HUD daemon that also acts as a declarative native application framework. One HTML file = one native app with full Node.js + DOM access. Use this skill whenever the user wants a desktop widget, overlay, dashboard, system monitor, file browser, log viewer, database inspector, any visual tool, a background service, or a packaged desktop application. Also use when the user says "show me", "display", "draw on screen", "overlay", "HUD", "widget", "native app", or wants to build a local GUI app. The output is one HTML file — drop it in a folder, it runs. No build step, no dependencies.
+description: A HUD daemon that also acts as a declarative native application framework. One HTML file = one native app with full Node.js + DOM access. Use this skill whenever the user wants a desktop widget, overlay, dashboard, system monitor, file browser, log viewer, database inspector, any visual tool, a background service, or a packaged desktop application. Also use when the user says "show me", "display", "draw on screen", "overlay", "HUD", "widget", "native app", "monitor", "dashboard", "panel", "status bar", "tray tool", "background service", "daemon", "chart", "graph", "plot", "visualize", "desktop app", "floating window", or wants to build a local GUI app. The output is one HTML file (visual) or one JS file (background service) — drop it in a folder, it runs. No build step, no dependencies.
 ---
 
 # hudd
@@ -14,7 +14,7 @@ hudsh run page "code"           →  eval into live process  →  window changes
 
 ## Mental model
 
-hudd is a daemon. HTML files are its clients. The filesystem is the connection protocol.
+Electron, used as a daemon — not an application. HTML files are its clients. The filesystem is the connection protocol.
 
 Traditional display servers (X11, Wayland) give you a framebuffer and say "draw your own pixels." hudd gives you Chromium — the world's most advanced layout engine, text shaper, animation engine, and compositor — and says "declare what you want." You write CSS, not pixel math. You write `<canvas>`, not `glBegin`.
 
@@ -32,15 +32,15 @@ The runtime is persistent — variables, connections, servers, timers survive ac
 
 ## Choosing a runtime
 
-One daemon, two runtimes. Pick by whether the task needs a DOM:
+One daemon, three ways to run code. Pick by whether the task needs a DOM and how it should deploy:
 
-| | Main process | Widget process |
-|---|---|---|
-| Entry | `hudsh run "code"` | `hudsh run <page> "code"` |
-| Has DOM | No | Yes |
-| Lifecycle | Daemon lifetime | Widget lifetime (file exists → alive) |
-| Scope | One shared context | One context per HTML file |
-| Use for | Services, shared state, data processing, automation | Visual tools — one file, one window, one concern |
+| | Main process (eval) | Main process (hooks .js) | Widget process |
+|---|---|---|---|
+| Entry | `hudsh run "code"` | Drop `.js` in hooks dir | Drop `.html` in hooks dir |
+| Has DOM | No | No | Yes |
+| Lifecycle | Daemon lifetime | File lifetime (hot-reload) | File lifetime (hot-reload) |
+| Scope | One shared context | One module per file | One context per HTML file |
+| Use for | Ad-hoc commands, inspection, scripting | Persistent services, scheduled tasks, shared state | Visual tools — one file, one window, one concern |
 
 **Main process** — pure Node.js, no window. `const/let/var` all persist. Use for anything that doesn't need to render: HTTP servers, database connections, file watchers, scheduled tasks, shared state. Equivalent to a persistent `node` REPL.
 
@@ -133,7 +133,28 @@ Windows:  %LOCALAPPDATA%\hudd\hooks\
 Other:    ~/hudd/hooks/
 ```
 
-Write a file → widget appears. Modify → reloads. Delete → closes. Widget ID = `hook-<filename>`.
+Write an `.html` file → widget appears. Modify → reloads. Delete → closes. Widget ID = `hook-<filename>`.
+
+#### JS scripts in hooks (main process services)
+
+`.js` files in the hooks directory run in the main process, not in a window. Drop a `.js` file → it's `require()`'d into the Electron main process. Delete → it's unloaded. Modify → unloaded and re-loaded (hot-reload).
+
+The module can export a cleanup function (called on unload/reload):
+
+```javascript
+// hooks/heartbeat.js — runs in main process, no DOM
+const timer = setInterval(() => {
+  console.log(`alive: ${Date.now()}`);
+}, 60000);
+
+// Option 1: export a function
+module.exports = () => clearInterval(timer);
+
+// Option 2: export { dispose }
+module.exports = { dispose: () => clearInterval(timer) };
+```
+
+Script ID = `hook-<filename without .js>`. Use for background services, scheduled tasks, shared state, persistent connections — anything that should outlive any individual widget. Widgets can coordinate with these services via IPC or shared state in main eval.
 
 ### App directory (alongside hud.js)
 
@@ -288,6 +309,8 @@ hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ El
 - **Token**: 128-bit random, `daemon.json` (DACL on Windows, chmod 600 on POSIX)
 - **Renderer**: `nodeIntegration: true`, `sandbox: false` — treat like SSH into a Node.js + DOM runtime
 
+You are responsible for what runs inside. Don't `<script src="https://...">` from external CDNs. Don't load untrusted HTML. If you want to browse the web, use a real browser — hudd is a runtime for your own code.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -321,7 +344,7 @@ my-env/
 ## Gotchas
 
 - **Native npm modules** (better-sqlite3, sharp, etc.) are compiled against a specific Node ABI. Electron bundles its own Node version, so native modules need `electron-rebuild` or `@electron/rebuild` to match. Pure JS packages (ws, lodash, etc.) work without rebuild.
-- **`localStorage` / `sessionStorage` / IndexedDB are disabled.** `require('fs')` is storage. `require('better-sqlite3')` is the database. If you try browser storage APIs, they silently fail.
+- **`localStorage` / `sessionStorage` / IndexedDB are disabled.** This is the #1 trap for web developers: `localStorage.setItem()` silently succeeds but the data is gone on next load. No error, no warning — it just vanishes. Use `require('fs')` for storage and `require('better-sqlite3')` for structured data. If data isn't persisting and there's no error, you're almost certainly using a browser storage API.
 - **Meta JSON parse error** → `readMeta` returns `null` → widget skipped in app dir, loaded with defaults in hooks dir. No error message — check hud.log.
 - **`require()` of missing module** → renderer throws, widget shows blank. Not a crash — the process survives, other widgets unaffected. Check DevTools console (right-click → DevTools).
 
