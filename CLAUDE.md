@@ -1,6 +1,6 @@
 # hudd
 
-Declarative native application framework. Mechanism only, zero policy.
+Display server. Rendering protocol is HTML. Every window is a Node.js runtime. Mechanism only, zero policy.
 
 ## Structure
 

@@ -1,7 +1,7 @@
 {
   "name": "@rangersui/hudd",
   "version": "0.1.0",
-  "description": "HUD daemon that also acts as a declarative native application framework.",
+  "description": "A display server where the rendering protocol is HTML and every window is a Node.js runtime.",
   "main": "hud.js",
   "bin": {
     "hudd": "bin/hudd.js",
