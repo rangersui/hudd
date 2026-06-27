@@ -240,7 +240,7 @@ function resolveMeta(meta) {
 // WIDGET FACTORY
 // ════════════════════════════════════════════
 
-function createWidget(id, filepath, meta) {
+function createWidget(id, filepath, meta, { untrusted = false } = {}) {
   if (widgets[id]) return widgets[id];
 
   const m = resolveMeta(meta);
@@ -248,6 +248,26 @@ function createWidget(id, filepath, meta) {
 
   // layer: DEFAULTS → overlay (if applicable) → meta declaration
   const d = { ...DEFAULTS, ...(ov ? OVERLAY_DEFAULTS : {}), ...m };
+
+  // Trust boundary: per-directory, not per-runtime.
+  //   trusted (app dir, hooks dir) — nodeIntegration: true, full Node.js + DOM
+  //   untrusted (external dir)     — sandboxed, no Node, no file access
+  const webPreferences = untrusted
+    ? {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+      }
+    : {
+        nodeIntegration: true,
+        contextIsolation: false,
+        sandbox: false,
+        webSecurity: false,
+        allowRunningInsecureContent: true,
+        webviewTag: !!m.webviewTag,
+      };
 
   const win = new BrowserWindow({
     width: m.width, height: m.height,
@@ -267,15 +287,14 @@ function createWidget(id, filepath, meta) {
     roundedCorners: d.roundedCorners,
     minWidth: d.resizable ? d.minWidth : undefined,
     minHeight: d.resizable ? d.minHeight : undefined,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      sandbox: false,
-      webSecurity: false,
-      allowRunningInsecureContent: true,
-      webviewTag: !!m.webviewTag,
-    },
+    webPreferences,
   });
+
+  // Untrusted widgets: lock down navigation and new windows
+  if (untrusted) {
+    win.webContents.on("will-navigate", (e) => e.preventDefault());
+    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  }
 
   win.setSkipTaskbar(d.skipTaskbar);
   if (d.clickThrough) win.setIgnoreMouseEvents(true, { forward: true });
@@ -319,7 +338,7 @@ function createWidget(id, filepath, meta) {
 const scripts = {};  // id -> { module, dispose }
 
 function loadDir(dir, opts = {}) {
-  const { prefix, defaultOnNoMeta } = opts;
+  const { prefix, defaultOnNoMeta, untrusted = false } = opts;
 
   // ── HTML widgets ──
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith(".html"))) {
@@ -335,15 +354,15 @@ function loadDir(dir, opts = {}) {
     if (widgets[id]) { log(`[loadDir] skip ${id} — already exists`); continue; }
 
     try {
-      createWidget(id, filepath, meta || { resizable: true });
-      log(`[loadDir] created ${id} from ${file}`);
+      createWidget(id, filepath, meta || { resizable: true }, { untrusted });
+      log(`[loadDir] created ${id} from ${file}${untrusted ? " (untrusted)" : ""}`);
     } catch (err) {
       log(`[loadDir] FAILED to create ${id} from ${file}:`, err);
     }
   }
 
-  // ── JS scripts (hooks dir only) ──
-  if (!prefix) return;  // app dir doesn't auto-run .js
+  // ── JS scripts (trusted dirs only) ──
+  if (!prefix || untrusted) return;  // app dir and external dir don't auto-run .js
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith(".js"))) {
     const filepath = path.join(dir, file);
     const id = prefix + file.replace(".js", "");
@@ -373,10 +392,11 @@ function unloadScript(id) {
   log(`[loadDir] script ${id} unloaded`);
 }
 
-function handleChange(dir, filename, prefix) {
+function handleChange(dir, filename, prefix, { untrusted = false } = {}) {
   const filepath = path.join(dir, filename);
 
   if (filename.endsWith(".js")) {
+    if (untrusted) return;  // external dir: no .js execution
     const id = prefix + filename.replace(".js", "");
     if (!fs.existsSync(filepath)) { unloadScript(id); return; }
     unloadScript(id);
@@ -399,16 +419,16 @@ function handleChange(dir, filename, prefix) {
 
   // new file — create
   const meta = readMeta(filepath);
-  createWidget(id, filepath, meta || { resizable: true });
+  createWidget(id, filepath, meta || { resizable: true }, { untrusted });
 }
 
-function watchDir(dir, prefix) {
+function watchDir(dir, prefix, { untrusted = false } = {}) {
   const timers = {};
   fs.watch(dir, (_event, filename) => {
     if (!filename) return;
     if (!filename.endsWith(".html") && !filename.endsWith(".js")) return;
     clearTimeout(timers[filename]);
-    timers[filename] = setTimeout(() => handleChange(dir, filename, prefix), 100);
+    timers[filename] = setTimeout(() => handleChange(dir, filename, prefix, { untrusted }), 100);
   });
 }
 
@@ -457,6 +477,7 @@ if (!gotLock) { app.quit(); return; }
 app.on("second-instance", (_e, argv) => parseFilesFromArgv(argv));
 
 const HOOKS_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), "hudd", "hooks");
+const EXTERNAL_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), "hudd", "external");
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);  // no default menu — saves memory, right-click still works
@@ -465,6 +486,11 @@ app.whenReady().then(() => {
   fs.mkdirSync(HOOKS_DIR, { recursive: true });
   loadDir(HOOKS_DIR, { prefix: "hook-", defaultOnNoMeta: true });
   watchDir(HOOKS_DIR, "hook-");
+
+  // external dir — reserved namespace for untrusted content.
+  // v0: directory exists, nothing loads. Zero attack surface.
+  // Putting a file here is a deliberate act — the UX is the filesystem.
+  fs.mkdirSync(EXTERNAL_DIR, { recursive: true });
 
   parseFilesFromArgv(process.argv);
 
@@ -551,6 +577,13 @@ ipcMain.handle("list-available", () => {
     for (const file of fs.readdirSync(HOOKS_DIR).filter(f => f.endsWith(".html"))) {
       const id = "hook-" + file.replace(".html", "");
       available[id] = { file, dir: HOOKS_DIR, loaded: !!widgets[id] };
+    }
+  } catch {}
+  // external dir — visible but never loaded (untrusted)
+  try {
+    for (const file of fs.readdirSync(EXTERNAL_DIR).filter(f => f.endsWith(".html"))) {
+      const id = "ext-" + file.replace(".html", "");
+      available[id] = { file, dir: EXTERNAL_DIR, loaded: false, untrusted: true };
     }
   } catch {}
   return available;

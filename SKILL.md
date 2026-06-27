@@ -97,7 +97,16 @@ Scanned at boot + watched with `fs.watch`. Meta tag is optional (defaults applie
 
 Write a file → widget appears. Modify → reloads. Delete → closes. Any external process can drop files here without knowing hudd exists.
 
-### Common rules for both
+### 3. External directory (untrusted, inert)
+
+```
+Windows:  %LOCALAPPDATA%\hudd\external\
+Other:    ~/hudd/external/
+```
+
+Created at boot but never loaded. Files here are visible in `list-available` (with `untrusted: true`) but never executed. The directory is the UX — putting a file here is a deliberate act that says "this is untrusted." Widget ID = `ext-<filename>`. Zero attack surface: no code paths touch these files.
+
+### Common rules for app + hooks (trusted)
 
 - `-webkit-app-region: drag` on the draggable element
 - `nodeIntegration: true` — `require('fs')`, `require('os')`, etc. work
@@ -222,19 +231,19 @@ hudsh attach <page>        # open Chrome DevTools for a page
 
 ## Security
 
-Electron runs with `--remote-debugging-pipe` — zero TCP ports from Chrome. The gateway process (`bin/hudd.js`) opens the only TCP port with token auth.
+Widgets are your code on your machine. The trust boundary is not inside the renderer — it is at who can connect to the daemon and who can write to the hooks directory.
+
+All Chromium protection-layer features are disabled (CORS, CSP, permissions, storage sandbox, Service Workers, site isolation). All rendering-layer features are kept (Canvas, WebGL, Web Audio, MediaStream, CSS). `require('fs')` is storage; browser storage APIs are dead weight.
+
+Electron runs with `--remote-debugging-pipe` — zero TCP ports from Chrome. The gateway opens the only TCP port with token auth.
 
 ```
-client (hudsh) ─── Bearer token ──→ gateway :9500 ─── fd 3/4 pipe ──→ Electron
-                                    (bin/hudd.js)                     (no TCP)
+hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ Electron (no TCP)
 ```
 
-- **Token**: `crypto.randomBytes(16)`, stored in `daemon.json`
-- **Auth**: `Authorization: Bearer <token>` header (hudsh reads token from daemon.json automatically)
-- **File protection**: DACL on Windows, chmod 700/600 on POSIX
-- **Renderer**: `nodeIntegration: true`, `sandbox: false` — full RCE by design. Treat like SSH into a Node.js + DOM runtime.
-
-`hudsh` reads the token from `daemon.json` transparently — no manual token management needed.
+- **Token**: 128-bit random, stored in `daemon.json` (DACL on Windows, chmod 600 on POSIX)
+- **Auth**: `Authorization: Bearer <token>` — `hudsh` reads token from `daemon.json` automatically
+- **Renderer**: `nodeIntegration: true`, `sandbox: false` — every widget is a Node.js process with a DOM. Treat like SSH into a live runtime.
 
 ## Environment variables
 

@@ -25,6 +25,7 @@ hud.js is a pure runtime shell. Provides mechanism, not policy. All behavior con
 - **Metadata-driven**: HTML files declare intent via `<meta name="hudd" content='...'>`. Any window property (frame, transparency, shadow, level, click-through, etc.) can be set in the meta tag. Undeclared fields fall through to `DEFAULTS`, or `OVERLAY_DEFAULTS` for `type: "overlay"`.
 - **App dir** (`__dirname`): loads `.html` files that have `<meta name="hudd">`. No meta → skipped.
 - **Hooks dir** (`%LOCALAPPDATA%\hudd\hooks\`): loads ALL `.html` files (meta optional, defaults applied). Also loads `.js` files via `require()` in main process.
+- **External dir** (`%LOCALAPPDATA%\hudd\external\`): created at boot, never loaded. Visible in `list-available` with `untrusted: true`. The directory is the UX — putting a file here is a deliberate act that says "this is untrusted content." Zero attack surface: no code paths touch it.
 - **fs.watch on hooks**: drop/modify/delete → auto load/reload/unload.
 - **Single-instance**: second `electron hud.js file.html` forwards to running instance via `requestSingleInstanceLock`.
 - **Daemon mode**: stays alive with zero widgets — new widgets arrive via hooks dir, CLI, or IPC.
@@ -33,6 +34,34 @@ hud.js is a pure runtime shell. Provides mechanism, not policy. All behavior con
 - **Right-click → DevTools**: context menu on any widget for inspect/devtools/reload/close.
 
 ## Security
+
+### Trust model
+
+Electron's default security model (sandbox + contextIsolation) exists to protect
+against untrusted content in the renderer — third-party iframes, user-generated
+HTML, OAuth popups. The renderer is treated as a hostile browser tab; Node access
+goes through IPC to the main process.
+
+hudd widgets are your own code running on your own machine. There is no untrusted
+content. The trust boundary is not between renderer and main process — it is at
+who can connect to the daemon and who can write to the hooks directory.
+
+### Scorched earth: protection layer off, rendering layer on
+
+All Chromium features are classified as either **protection layer** (exists because
+browsers don't trust web pages) or **rendering layer** (IS the rendering engine).
+
+- **KILL** — CORS, CSP, permissions, storage sandbox, Service Workers, certificates,
+  mixed content, cookie policy, safe browsing, site isolation, A/B experiments.
+- **KEEP** — Canvas, WebGL, Web Audio, MediaStream, CSS animations, `<video>`,
+  ResizeObserver, IntersectionObserver, requestAnimationFrame.
+
+`require('fs')` is storage. `require('better-sqlite3')` is the database.
+`navigator.mediaDevices.getUserMedia()` into `<video>.srcObject` is the camera.
+Browser storage and permissions exist because web pages can't touch the filesystem
+or hardware — here they can.
+
+### Gateway auth
 
 Electron runs with `--remote-debugging-pipe` — zero TCP ports from Chrome. The gateway process (`bin/hudd.js`) opens the TCP port with token auth.
 
@@ -47,17 +76,24 @@ client (hudsh) ─── Bearer token ──→ gateway :9500 ─── fd 3/4 p
 - **File protection**: DACL on Windows (`icacls OWNER RIGHTS`), chmod 700/600 on POSIX
 - **Duplicate guard**: daemon refuses to start if existing PID is alive
 - **DACL failure**: fatal — daemon exits if directory cannot be secured
-- **Renderer**: `nodeIntegration: true`, `sandbox: false`, `webSecurity: false` — full RCE by design. All Chromium security theater disabled.
+
+### Renderer
+
+`nodeIntegration: true`, `sandbox: false`, `webSecurity: false`. Every widget is
+a Node.js process with a DOM. `require()` anything, access the filesystem, spawn
+processes, open sockets — same as SSH into a live runtime. Treat accordingly.
 
 ## Key paths
 
 - **daemon.json**: `%LOCALAPPDATA%\hudd\daemon.json` — PID, port, token
 - **hooks dir**: `%LOCALAPPDATA%\hudd\hooks\` — drop HTML/JS here → auto-loads
+- **external dir**: `%LOCALAPPDATA%\hudd\external\` — untrusted holding area (visible, never loaded)
 
 ## Widget IDs
 
 - App dir: `meta.id` field, or filename without `.html`
 - Hooks: `hook-<filename>` (e.g., `hooks/mgr.html` → `hook-mgr`)
+- External: `ext-<filename>` (visible in `list-available`, never loaded)
 
 ## Defaults (layered)
 

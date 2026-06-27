@@ -30,7 +30,16 @@ Other:    ~/hudd/hooks/
 
 All `.html` files loaded (meta optional). `.js` files `require()`'d in main process. Watched with `fs.watch` — drop a file → widget appears, delete → closes.
 
-### 3. hudsh (real-time)
+### 3. External directory (untrusted)
+
+```
+Windows:  %LOCALAPPDATA%\hudd\external\
+Other:    ~/hudd/external/
+```
+
+Created at boot, never loaded. Visible in `list-available` but inert. Putting a file here is a deliberate act — the filesystem is the permission model.
+
+### 4. hudsh (real-time)
 
 Evaluate JS in any page via CDP:
 
@@ -39,7 +48,7 @@ hudsh run overlay "document.title"
 hudsh run overlay "require('os').hostname()"
 ```
 
-### 4. Open any HTML file
+### 5. Open any HTML file
 
 ```bash
 electron hud.js /path/to/file.html   # single-instance, forwards to running daemon
@@ -76,15 +85,17 @@ Each widget is a long-lived Node.js process. Variables (`window.*`), connections
 
 ## Security
 
-Electron runs with `--remote-debugging-pipe` — zero TCP ports from Chrome. The gateway process opens the only TCP port (default :9500) with token auth.
+Widgets are your code on your machine. Trust boundary is at the daemon, not inside the renderer.
+
+All Chromium protection-layer features are off (CORS, CSP, permissions, storage sandbox, Service Workers). Rendering-layer features stay (Canvas, WebGL, Web Audio, MediaStream, CSS). `require('fs')` is storage; `navigator.mediaDevices.getUserMedia()` is the camera. No IPC glue — the renderer IS the runtime.
 
 ```
 hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ Electron (no TCP)
 ```
 
-- **Token**: 128-bit random, stored in `daemon.json` (DACL-protected on Windows, chmod 600 on POSIX)
-- **Auth**: `Authorization: Bearer <token>` — `hudsh` reads token from `daemon.json` automatically
-- **Renderer**: `nodeIntegration: true`, `sandbox: false` — full RCE by design. Treat like SSH into a Node.js + DOM runtime.
+- **Token**: 128-bit random, `daemon.json` (DACL on Windows, chmod 600 on POSIX)
+- **Auth**: `hudsh` reads token from `daemon.json` automatically
+- **Renderer**: `nodeIntegration: true`, `sandbox: false` — treat like SSH into a Node.js + DOM runtime
 
 ## Renderer environment
 
