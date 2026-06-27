@@ -1,3 +1,6 @@
 node_modules/
 package-lock.json
 *.log
+
+# widgets are user content, not part of the runtime
+*.html

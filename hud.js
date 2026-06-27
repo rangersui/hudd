@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, globalShortcut } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, Menu } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -6,166 +6,393 @@ const os = require("os");
 app.commandLine.appendSwitch("remote-debugging-port", "9500");
 app.disableHardwareAcceleration();
 
-let overlayWin = null;
+// ── Strip Chromium to a bare rendering shell ──
+// networking & telemetry
+app.commandLine.appendSwitch("disable-sync");
+app.commandLine.appendSwitch("disable-background-networking");
+app.commandLine.appendSwitch("disable-breakpad");
+app.commandLine.appendSwitch("disable-domain-reliability");
+app.commandLine.appendSwitch("disable-client-side-phishing-detection");
+app.commandLine.appendSwitch("no-pings");
+app.commandLine.appendSwitch("metrics-recording-only");
+// chrome UI & extensions
+app.commandLine.appendSwitch("disable-translate");
+app.commandLine.appendSwitch("disable-default-apps");
+app.commandLine.appendSwitch("disable-extensions");
+app.commandLine.appendSwitch("disable-component-update");
+app.commandLine.appendSwitch("disable-component-extensions-with-background-pages");
+app.commandLine.appendSwitch("no-first-run");
+app.commandLine.appendSwitch("no-default-browser-check");
+// web APIs we never use
+app.commandLine.appendSwitch("disable-speech-api");
+app.commandLine.appendSwitch("disable-print-preview");
+app.commandLine.appendSwitch("disable-notifications");
+app.commandLine.appendSwitch("disable-presentation-api");
+app.commandLine.appendSwitch("disable-remote-playback-api");
+app.commandLine.appendSwitch("disable-shared-workers");
+app.commandLine.appendSwitch("disable-remote-fonts");
+app.commandLine.appendSwitch("disable-webrtc-encryption");
+app.commandLine.appendSwitch("deny-permission-prompts");
+// renderer & scheduling
+app.commandLine.appendSwitch("disable-hang-monitor");
+app.commandLine.appendSwitch("disable-ipc-flooding-protection");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-v8-idle-tasks");
+app.commandLine.appendSwitch("disable-back-forward-cache");
+app.commandLine.appendSwitch("disable-lazy-loading");
+app.commandLine.appendSwitch("disable-scroll-to-text-fragment");
+// GPU (already off, belt-and-suspenders)
+app.commandLine.appendSwitch("disable-gpu-compositing");
+app.commandLine.appendSwitch("disable-gpu-early-init");
+app.commandLine.appendSwitch("in-process-gpu");
+// feature flags — one call, everything merged
+app.commandLine.appendSwitch("disable-features", [
+  "TranslateUI", "SpareRendererForSitePerProcess", "AutofillServerCommunication",
+  "MediaRouter", "CalculateNativeWinOcclusion",
+  "WebRtcHideLocalIpsWithMdns", "WebUSB", "WebBluetooth", "WebNFC",
+  "IdleDetection", "PeriodicBackgroundSync", "BackgroundFetch",
+  "NavigationPredictor", "Prerender2", "PrefetchProxy",
+  "OptimizationHints", "OptimizationGuideFetching", "OptimizationGuideModelDownloading",
+  "OnDeviceWebSpeech", "PrivacySandboxAdsAPIs", "InterestCohortAPI", "BrowsingTopics",
+  "TrustTokens", "FedCm", "SignedExchange", "WebPayments",
+  "SafeBrowsing", "SafeBrowsingEnhancedProtection", "HeavyAdIntervention",
+  "TextFragmentAnchor", "SpeculativeServiceWorkerWarmUp", "ServiceWorkerAutoPreload",
+  "UseEcoQoSForBackgroundProcess", "AutofillEnableAccountWalletStorage",
+  "GlobalMediaControls", "GlobalMediaControlsForCast",
+  "LiveCaption", "LensOverlay", "OverscrollHistoryNavigation",
+].join(","));
+// blink feature kills
+app.commandLine.appendSwitch("disable-blink-features",
+  "NetworkInformation,BatteryStatus,WebShare,DigitalGoods"
+);
+
 const widgets = {};  // id -> BrowserWindow
+const _log = fs.createWriteStream(path.join(__dirname, "hud.log"), { flags: "w" });
+function log(...args) { _log.write(new Date().toISOString() + " " + args.join(" ") + "\n"); }
 
 // ════════════════════════════════════════════
-// OVERLAY — fullscreen transparent click-through
+// METADATA
 // ════════════════════════════════════════════
 
-function createOverlay() {
+function readMeta(filepath) {
+  try {
+    const head = fs.readFileSync(filepath, "utf-8").slice(0, 2000);
+    const m = head.match(/<meta\s+name="hudd"\s+content='([^']+)'/);
+    return m ? JSON.parse(m[1]) : null;
+  } catch { return null; }
+}
+
+function resolveMeta(meta) {
   const display = screen.getPrimaryDisplay();
-  const { x, y, width, height } = display.bounds;
 
-  overlayWin = new BrowserWindow({
-    // inset 1px so Windows can still detect screen-edge hover (taskbar auto-hide)
-    x: x + 1, y: y + 1,
-    width: width - 2, height: height - 2,
-    transparent: true,
-    frame: false,
-    show: false,
-    focusable: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    movable: false,
-    hasShadow: false,
-    thickFrame: false,
-    type: "toolbar",
-    backgroundColor: "#00000000",
-    roundedCorners: false,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-    },
-  });
+  // overlay — fullscreen, inset 1px for taskbar auto-hide
+  if (meta.type === "overlay") {
+    const { x, y, width, height } = display.bounds;
+    return { ...meta, x: x + 1, y: y + 1, width: width - 2, height: height - 2 };
+  }
 
-  overlayWin.setSkipTaskbar(true);
-  overlayWin.setIgnoreMouseEvents(true, { forward: true });
-  overlayWin.setAlwaysOnTop(true, "screen-saver");
-  overlayWin.loadFile(path.join(__dirname, "overlay.html"));
-  overlayWin.once("ready-to-show", () => overlayWin.showInactive());
+  // normal widget
+  const { width: sw, height: sh } = display.workAreaSize;
+  const w = meta.width || 360;
+  const h = meta.height || 260;
+  let x, y;
+
+  if (meta.x != null && meta.y != null) {
+    x = meta.x; y = meta.y;
+  } else if (meta.position) {
+    const pad = 30;
+    switch (meta.position) {
+      case "top-left":       x = 50;                         y = pad;                         break;
+      case "top-right":      x = sw - w - pad;               y = pad;                         break;
+      case "bottom-left":    x = 50;                         y = sh - h - pad;                break;
+      case "bottom-right":   x = sw - w - pad;               y = sh - h - pad;                break;
+      case "bottom-center":  x = Math.round((sw - w) / 2);   y = sh - h - pad;                break;
+      case "center":         x = Math.round((sw - w) / 2);   y = Math.round((sh - h) / 2);   break;
+      default:               x = sw - w - pad;               y = sh - h - pad;
+    }
+  } else {
+    // cascade: offset from top-right based on how many widgets exist
+    const n = Object.keys(widgets).length;
+    x = sw - w - 30 - (n % 5) * 30;
+    y = 260 + (n % 10) * 30;
+  }
+
+  return { ...meta, width: w, height: h, x, y };
 }
 
 // ════════════════════════════════════════════
-// WIDGETS — small interactive windows
+// WIDGET FACTORY
 // ════════════════════════════════════════════
 
-function createWidget(id, opts = {}) {
+function createWidget(id, filepath, meta) {
   if (widgets[id]) return widgets[id];
 
-  const w = opts.width || 340;
-  const h = opts.height || 200;
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
+  const m = resolveMeta(meta);
+  const ov = m.type === "overlay";
 
   const win = new BrowserWindow({
-    width: w, height: h,
-    x: opts.x ?? (sw - w - 30),
-    y: opts.y ?? (sh - h - 30),
+    width: m.width, height: m.height,
+    x: m.x, y: m.y,
     transparent: true,
     frame: false,
     show: false,
+    focusable: !ov,
     alwaysOnTop: true,
     skipTaskbar: true,
-    resizable: !!opts.resizable,
+    resizable: !ov && !!m.resizable,
+    movable: !ov,
     hasShadow: false,
-    thickFrame: !!opts.resizable,
+    thickFrame: !ov && !!m.resizable,
     type: "toolbar",
     backgroundColor: "#00000000",
     roundedCorners: false,
-    minWidth: opts.resizable ? 200 : undefined,
-    minHeight: opts.resizable ? 120 : undefined,
+    minWidth: m.resizable ? 200 : undefined,
+    minHeight: m.resizable ? 120 : undefined,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      webviewTag: !!opts.webviewTag,
+      sandbox: false,
+      webviewTag: !!m.webviewTag,
     },
   });
 
   win.setSkipTaskbar(true);
-  win.setAlwaysOnTop(true, "pop-up-menu");
-  win.loadFile(path.join(__dirname, opts.htmlFile || "hud.html"), { query: { id } });
-  widgets[id] = win;
-  win.once("ready-to-show", () => win.showInactive());
-  win.on("closed", () => { delete widgets[id]; });
+  if (ov) {
+    win.setIgnoreMouseEvents(true, { forward: true });
+    win.setAlwaysOnTop(true, "screen-saver");
+  } else {
+    win.setAlwaysOnTop(true, "pop-up-menu");
+  }
 
-  // analyzer: notify renderer when window moves or resizes
-  if (id === "analyzer") {
-    win.on("moved", () => {
-      if (!win.isDestroyed()) win.webContents.send("position-changed");
-    });
-    win.on("resized", () => {
-      if (!win.isDestroyed()) win.webContents.send("position-changed");
-    });
+  win.loadFile(filepath, { query: { id } });
+  widgets[id] = win;
+  log(`created ${id}`);
+  win.once("ready-to-show", () => win.showInactive());
+  win.on("closed", () => { log(`closed ${id}`); delete widgets[id]; });
+
+  // right-click → DevTools
+  win.webContents.on("context-menu", (_e, params) => {
+    Menu.buildFromTemplate([
+      { label: `Inspect (${id})`, click: () => win.webContents.inspectElement(params.x, params.y) },
+      { label: "DevTools", click: () => win.webContents.toggleDevTools({ mode: "detach" }) },
+      { type: "separator" },
+      { label: "Reload", click: () => win.webContents.reload() },
+      { label: "Close", click: () => { win.close(); delete widgets[id]; } },
+    ]).popup();
+  });
+
+  if (m.trackPosition) {
+    win.on("moved", () => { if (!win.isDestroyed()) win.webContents.send("position-changed"); });
+    win.on("resized", () => { if (!win.isDestroyed()) win.webContents.send("position-changed"); });
   }
 
   return win;
 }
 
 // ════════════════════════════════════════════
-// APP READY
+// LOADING
 // ════════════════════════════════════════════
+
+const scripts = {};  // id -> { module, dispose }
+
+function loadDir(dir, opts = {}) {
+  const { prefix, defaultOnNoMeta } = opts;
+
+  // ── HTML widgets ──
+  for (const file of fs.readdirSync(dir).filter(f => f.endsWith(".html"))) {
+    const filepath = path.join(dir, file);
+    const meta = readMeta(filepath);
+
+    if (!meta && !defaultOnNoMeta) continue;
+
+    const id = prefix
+      ? prefix + file.replace(".html", "")
+      : ((meta && meta.id) || file.replace(".html", ""));
+
+    if (widgets[id]) { log(`[loadDir] skip ${id} — already exists`); continue; }
+
+    try {
+      createWidget(id, filepath, meta || { resizable: true });
+      log(`[loadDir] created ${id} from ${file}`);
+    } catch (err) {
+      log(`[loadDir] FAILED to create ${id} from ${file}:`, err);
+    }
+  }
+
+  // ── JS scripts (hooks dir only) ──
+  if (!prefix) return;  // app dir doesn't auto-run .js
+  for (const file of fs.readdirSync(dir).filter(f => f.endsWith(".js"))) {
+    const filepath = path.join(dir, file);
+    const id = prefix + file.replace(".js", "");
+    if (scripts[id]) continue;
+    loadScript(id, filepath);
+  }
+}
+
+function loadScript(id, filepath) {
+  try {
+    const resolved = require.resolve(filepath);
+    delete require.cache[resolved];
+    const mod = require(resolved);
+    scripts[id] = { path: filepath, dispose: typeof mod === "function" ? mod : (mod && mod.dispose) };
+    log(`[loadDir] script ${id} loaded`);
+  } catch (err) {
+    log(`[loadDir] FAILED script ${id}:`, err);
+  }
+}
+
+function unloadScript(id) {
+  const s = scripts[id];
+  if (!s) return;
+  try { if (typeof s.dispose === "function") s.dispose(); } catch {}
+  try { delete require.cache[require.resolve(s.path)]; } catch {}
+  delete scripts[id];
+  log(`[loadDir] script ${id} unloaded`);
+}
+
+function handleChange(dir, filename, prefix) {
+  const filepath = path.join(dir, filename);
+
+  if (filename.endsWith(".js")) {
+    const id = prefix + filename.replace(".js", "");
+    if (!fs.existsSync(filepath)) { unloadScript(id); return; }
+    unloadScript(id);
+    loadScript(id, filepath);
+    return;
+  }
+
+  const id = prefix + filename.replace(".html", "");
+
+  if (!fs.existsSync(filepath)) {
+    if (widgets[id]) { widgets[id].close(); delete widgets[id]; }
+    return;
+  }
+
+  // existing widget — just reload content
+  if (widgets[id]) {
+    widgets[id].loadFile(filepath, { query: { id } });
+    return;
+  }
+
+  // new file — create
+  const meta = readMeta(filepath);
+  createWidget(id, filepath, meta || { resizable: true });
+}
+
+function watchDir(dir, prefix) {
+  const timers = {};
+  fs.watch(dir, (_event, filename) => {
+    if (!filename) return;
+    if (!filename.endsWith(".html") && !filename.endsWith(".js")) return;
+    clearTimeout(timers[filename]);
+    timers[filename] = setTimeout(() => handleChange(dir, filename, prefix), 100);
+  });
+}
+
+// ════════════════════════════════════════════
+// EVENTS — broadcast to all widgets
+// ════════════════════════════════════════════
+
+function broadcast(event, ...args) {
+  for (const win of Object.values(widgets)) {
+    if (!win.isDestroyed()) win.webContents.send(event, ...args);
+  }
+}
+
+// ════════════════════════════════════════════
+// OPEN FILE — any .html becomes a widget
+// ════════════════════════════════════════════
+
+function openFile(filepath) {
+  filepath = path.resolve(filepath);
+  if (!filepath.endsWith(".html") || !fs.existsSync(filepath)) return;
+  const basename = path.basename(filepath, ".html");
+  // reuse if same file already open
+  if (widgets[basename]) {
+    widgets[basename].show();
+    widgets[basename].focus();
+    return;
+  }
+  const meta = readMeta(filepath) || { resizable: true };
+  createWidget(basename, filepath, meta);
+}
+
+function parseFilesFromArgv(argv) {
+  // argv: [electron, hud.js, ...files] or [hudd.exe, ...files]
+  for (const arg of argv.slice(1)) {
+    if (arg.endsWith(".html") && !arg.startsWith("-")) openFile(arg);
+  }
+}
+
+// ════════════════════════════════════════════
+// BOOT — single instance lock
+// ════════════════════════════════════════════
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) { app.quit(); return; }
+
+app.on("second-instance", (_e, argv) => parseFilesFromArgv(argv));
+
+const HOOKS_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), "hudd", "hooks");
 
 app.whenReady().then(() => {
-  createOverlay();
-  createWidget("status", { width: 340, height: 200 });
-  createWidget("analyzer", {
-    width: 400, height: 300,
-    x: 100, y: 200,
-    htmlFile: "analyzer.html",
-    resizable: true,
-  });
+  loadDir(__dirname, { prefix: null, defaultOnNoMeta: false });
 
-  createWidget("browser", {
-    width: 900, height: 620,
-    x: 50, y: 30,
-    htmlFile: "browser.html",
-    resizable: true,
-    webviewTag: true,
-  });
+  fs.mkdirSync(HOOKS_DIR, { recursive: true });
+  loadDir(HOOKS_DIR, { prefix: "hook-", defaultOnNoMeta: true });
+  watchDir(HOOKS_DIR, "hook-");
 
-  initHooks();
+  parseFilesFromArgv(process.argv);
 
-  // F10 = restore all hidden widgets
   globalShortcut.register("F10", () => {
-    Object.entries(widgets).forEach(([id, win]) => {
+    for (const [id, win] of Object.entries(widgets)) {
       if (!win.isDestroyed() && !win.isVisible()) {
         win.show();
-        if (overlayWin && !overlayWin.isDestroyed()) {
-          overlayWin.webContents.send("widget-restored", id);
-        }
+        broadcast("widget-restored", id);
       }
-    });
+    }
   });
 });
 
 // ════════════════════════════════════════════
-// IPC — drag
+// IPC — all generic, zero widget names
 // ════════════════════════════════════════════
 
-ipcMain.on("start-drag", (e, { id, mouseX, mouseY }) => {
-  const win = widgets[id];
-  if (!win) return;
-  const [wx, wy] = win.getPosition();
-  const offX = mouseX, offY = mouseY;
-
-  const move = (_e2, { x, y }) => {
-    win.setPosition(wx + x - offX, wy + y - offY);
-  };
-  const up = () => {
-    ipcMain.removeListener("drag-move", move);
-    ipcMain.removeListener("drag-end", up);
-  };
-  ipcMain.on("drag-move", move);
-  ipcMain.on("drag-end", up);
+ipcMain.on("minimize-widget", (_e, id) => {
+  if (widgets[id]) { widgets[id].hide(); broadcast("widget-minimized", id); }
 });
 
-// ════════════════════════════════════════════
-// IPC — analyzer bounds (returns physical pixels for mss)
-// ════════════════════════════════════════════
+ipcMain.on("close-widget", (_e, id) => {
+  log(`IPC close-widget: ${id}`);
+  if (widgets[id]) { widgets[id].close(); delete widgets[id]; broadcast("widget-closed", id); }
+});
 
-ipcMain.handle("get-analyzer-bounds", () => {
-  const win = widgets["analyzer"];
+ipcMain.on("restore-widget", (_e, id) => {
+  if (widgets[id]) { widgets[id].show(); broadcast("widget-restored", id); }
+});
+
+ipcMain.on("create-widget", (_e, data) => {
+  createWidget(data.id, data.filePath || path.join(__dirname, data.htmlFile), data);
+});
+
+ipcMain.on("open-file", (_e, filepath) => {
+  openFile(filepath);
+});
+
+ipcMain.on("set-ignore-mouse", (e, ignore) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(ignore, { forward: true });
+});
+
+ipcMain.on("set-bounds", (e, bounds) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed()) return;
+  if (bounds.width && bounds.height) win.setSize(bounds.width, bounds.height);
+  if (bounds.x != null && bounds.y != null) win.setPosition(bounds.x, bounds.y);
+});
+
+ipcMain.handle("get-own-bounds", (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
   if (!win) return null;
   const bounds = win.getBounds();
   const sf = screen.getPrimaryDisplay().scaleFactor;
@@ -177,120 +404,66 @@ ipcMain.handle("get-analyzer-bounds", () => {
   };
 });
 
-// ════════════════════════════════════════════
-// IPC — minimize / close / restore
-// ════════════════════════════════════════════
+ipcMain.handle("list-widgets", () => {
+  const result = {};
+  for (const [id, win] of Object.entries(widgets)) {
+    if (!win.isDestroyed()) result[id] = { visible: win.isVisible() };
+  }
+  return result;
+});
 
-ipcMain.on("minimize-widget", (_e, id) => {
-  if (widgets[id]) {
-    widgets[id].hide();
-    if (overlayWin && !overlayWin.isDestroyed()) {
-      overlayWin.webContents.send("widget-minimized", id);
+ipcMain.handle("list-available", () => {
+  const available = {};
+  // app dir — only files with meta
+  for (const file of fs.readdirSync(__dirname).filter(f => f.endsWith(".html"))) {
+    const meta = readMeta(path.join(__dirname, file));
+    if (!meta) continue;
+    const id = (meta && meta.id) || file.replace(".html", "");
+    available[id] = { file, dir: __dirname, loaded: !!widgets[id] };
+  }
+  // hooks dir
+  try {
+    for (const file of fs.readdirSync(HOOKS_DIR).filter(f => f.endsWith(".html"))) {
+      const id = "hook-" + file.replace(".html", "");
+      available[id] = { file, dir: HOOKS_DIR, loaded: !!widgets[id] };
     }
-  }
+  } catch {}
+  return available;
 });
 
-ipcMain.on("close-widget", (_e, id) => {
-  if (widgets[id]) {
-    widgets[id].close();
-    delete widgets[id];
-    if (overlayWin && !overlayWin.isDestroyed()) {
-      overlayWin.webContents.send("widget-closed", id);
-    }
-  }
-});
-
-ipcMain.on("restore-widget", (_e, id) => {
-  if (widgets[id]) {
-    widgets[id].show();
-    if (overlayWin && !overlayWin.isDestroyed()) {
-      overlayWin.webContents.send("widget-restored", id);
-    }
-  }
-});
-
-ipcMain.on("create-widget", (_e, data) => {
-  createWidget(data.id, data);
-});
-
-// ════════════════════════════════════════════
-// HOOKS — fs.watch auto-loads HTML as widgets
-// ════════════════════════════════════════════
-
-const LOCALAPPDATA = process.env.LOCALAPPDATA || os.homedir();
-const HOOKS_DIR = path.join(LOCALAPPDATA, "hudd", "hooks");
-
-function loadHookWidget(filename) {
-  const id = "hook-" + filename.replace(".html", "");
-  const filepath = path.join(HOOKS_DIR, filename);
-
-  if (widgets[id]) {
-    widgets[id].loadFile(filepath);
-    return;
-  }
-
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
-  // offset each hook widget so they don't stack exactly
-  const hookCount = Object.keys(widgets).filter(k => k.startsWith("hook-")).length;
-  const offset = hookCount * 30;
-
-  const win = new BrowserWindow({
-    width: 400, height: 300,
-    x: sw - 430 - offset,
-    y: Math.round(sh / 2 - 150) + offset,
-    transparent: true,
-    frame: false,
-    show: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: true,
-    hasShadow: false,
-    thickFrame: true,
-    type: "toolbar",
-    backgroundColor: "#00000000",
-    roundedCorners: false,
-    minWidth: 200,
-    minHeight: 120,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-    },
-  });
-
-  win.setSkipTaskbar(true);
-  win.setAlwaysOnTop(true, "pop-up-menu");
-  win.loadFile(filepath);
-  widgets[id] = win;
-  win.once("ready-to-show", () => win.showInactive());
-  win.on("closed", () => { delete widgets[id]; });
-}
-
-function initHooks() {
-  fs.mkdirSync(HOOKS_DIR, { recursive: true });
-
-  // load existing hook files
-  for (const file of fs.readdirSync(HOOKS_DIR)) {
-    if (file.endsWith(".html")) loadHookWidget(file);
-  }
-
-  // watch for changes — debounce per file
-  const timers = {};
-  fs.watch(HOOKS_DIR, (eventType, filename) => {
-    if (!filename || !filename.endsWith(".html")) return;
-    // debounce: Windows fires multiple events per change
-    clearTimeout(timers[filename]);
-    timers[filename] = setTimeout(() => {
-      const filepath = path.join(HOOKS_DIR, filename);
-      const id = "hook-" + filename.replace(".html", "");
-      if (fs.existsSync(filepath)) {
-        loadHookWidget(filename);
-      } else if (widgets[id]) {
-        widgets[id].close();
-        delete widgets[id];
+ipcMain.on("reopen-widget", (_e, id) => {
+  if (widgets[id]) { widgets[id].show(); widgets[id].focus(); return; }
+  // find the file
+  const dirs = [
+    { dir: __dirname, prefix: null },
+    { dir: HOOKS_DIR, prefix: "hook-" },
+  ];
+  for (const { dir, prefix } of dirs) {
+    try {
+      for (const file of fs.readdirSync(dir).filter(f => f.endsWith(".html"))) {
+        const fid = prefix
+          ? prefix + file.replace(".html", "")
+          : ((readMeta(path.join(dir, file)) || {}).id || file.replace(".html", ""));
+        if (fid === id) {
+          const filepath = path.join(dir, file);
+          const meta = readMeta(filepath) || { resizable: true };
+          createWidget(id, filepath, meta);
+          return;
+        }
       }
-    }, 100);
-  });
-}
+    } catch {}
+  }
+});
+
+ipcMain.on("start-drag", (e, { id, mouseX, mouseY }) => {
+  const win = widgets[id];
+  if (!win) return;
+  const [wx, wy] = win.getPosition();
+  const move = (_e2, { x, y }) => win.setPosition(wx + x - mouseX, wy + y - mouseY);
+  const up = () => { ipcMain.removeListener("drag-move", move); ipcMain.removeListener("drag-end", up); };
+  ipcMain.on("drag-move", move);
+  ipcMain.on("drag-end", up);
+});
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => app.quit());

@@ -1,5 +1,5 @@
 {
-  "name": "hudd",
+  "name": "@rangersui/hudd",
   "version": "0.1.0",
   "description": "Desktop overlay daemon. Drop HTML files, widgets appear on screen.",
   "main": "hud.js",
@@ -10,17 +10,19 @@
   "files": [
     "bin/",
     "lib/",
-    "hud.js",
-    "overlay.html",
-    "hud.html",
-    "analyzer.html",
-    "browser.html",
-    "SKILL.md"
+    "hud.js"
   ],
   "scripts": {
     "start": "electron ."
   },
-  "keywords": ["electron", "overlay", "hud", "daemon", "cdp", "desktop"],
+  "keywords": [
+    "electron",
+    "overlay",
+    "hud",
+    "daemon",
+    "cdp",
+    "desktop"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/rangersui/hudd.git"
