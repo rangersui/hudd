@@ -75,9 +75,88 @@ async function daemon(port) {
     } catch {}
   }
 
+  // ── Chromium flags — must be on the real command line ──
+  // appendSwitch() in hud.js runs AFTER Chromium's early init (sandbox
+  // check, GPU process fork, etc.), so flags like --no-sandbox are too
+  // late there. Pass everything here; hud.js keeps appendSwitch as
+  // belt-and-suspenders for direct `electron hud.js` invocations.
+  const chromiumFlags = [
+    // security theater off — nodeIntegration:true already grants full RCE
+    "--no-sandbox",
+    "--disable-gpu-sandbox",
+    "--disable-web-security",
+    "--disable-site-isolation-trials",
+    "--disable-site-isolation-for-policy",
+    "--allow-running-insecure-content",
+    "--allow-file-access-from-files",
+    "--allow-insecure-localhost",
+    "--ignore-certificate-errors",
+    "--disable-popup-blocking",
+    "--disable-prompt-on-repost",
+    // strip to bare rendering shell — networking & telemetry
+    "--disable-sync",
+    "--disable-background-networking",
+    "--disable-breakpad",
+    "--disable-domain-reliability",
+    "--disable-client-side-phishing-detection",
+    "--no-pings",
+    "--metrics-recording-only",
+    // chrome UI & extensions
+    "--disable-translate",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-component-update",
+    "--disable-component-extensions-with-background-pages",
+    "--no-first-run",
+    "--no-default-browser-check",
+    // web APIs we never use
+    "--disable-speech-api",
+    "--disable-print-preview",
+    "--disable-notifications",
+    "--disable-presentation-api",
+    "--disable-remote-playback-api",
+    "--disable-shared-workers",
+    "--disable-remote-fonts",
+    "--disable-webrtc-encryption",
+    "--deny-permission-prompts",
+    // renderer & scheduling
+    "--disable-hang-monitor",
+    "--disable-ipc-flooding-protection",
+    "--disable-renderer-backgrounding",
+    "--disable-v8-idle-tasks",
+    "--disable-back-forward-cache",
+    "--disable-lazy-loading",
+    "--disable-scroll-to-text-fragment",
+    // GPU
+    "--disable-gpu-compositing",
+    "--disable-gpu-early-init",
+    "--in-process-gpu",
+    // feature flags
+    "--disable-features=" + [
+      "TranslateUI", "SpareRendererForSitePerProcess", "AutofillServerCommunication",
+      "MediaRouter", "CalculateNativeWinOcclusion",
+      "WebRtcHideLocalIpsWithMdns", "WebUSB", "WebBluetooth", "WebNFC",
+      "IdleDetection", "PeriodicBackgroundSync", "BackgroundFetch",
+      "NavigationPredictor", "Prerender2", "PrefetchProxy",
+      "OptimizationHints", "OptimizationGuideFetching", "OptimizationGuideModelDownloading",
+      "OnDeviceWebSpeech", "PrivacySandboxAdsAPIs", "InterestCohortAPI", "BrowsingTopics",
+      "TrustTokens", "FedCm", "SignedExchange", "WebPayments",
+      "SafeBrowsing", "SafeBrowsingEnhancedProtection", "HeavyAdIntervention",
+      "TextFragmentAnchor", "SpeculativeServiceWorkerWarmUp", "ServiceWorkerAutoPreload",
+      "UseEcoQoSForBackgroundProcess", "AutofillEnableAccountWalletStorage",
+      "GlobalMediaControls", "GlobalMediaControlsForCast",
+      "LiveCaption", "LensOverlay", "OverscrollHistoryNavigation",
+      "BlockInsecurePrivateNetworkRequests", "IsolateOrigins",
+      "CrossOriginOpenerPolicy", "CrossOriginEmbedderPolicy",
+      "WebAuthentication", "SecurePaymentConfirmation",
+    ].join(","),
+    // blink feature kills
+    "--disable-blink-features=NetworkInformation,BatteryStatus,WebShare,DigitalGoods",
+  ];
+
   // Spawn Electron with --remote-debugging-pipe (no TCP port)
   // fd 3 = pipe input (we write), fd 4 = pipe output (we read)
-  const proc = spawn(electronPath, [APP_DIR, "--remote-debugging-pipe"], {
+  const proc = spawn(electronPath, [APP_DIR, "--remote-debugging-pipe", ...chromiumFlags], {
     stdio: ["ignore", "ignore", "inherit", "pipe", "pipe"],
     detached: false,
   });

@@ -9,6 +9,9 @@ if (process.env.HUDD_CDP_PORT) {
   app.commandLine.appendSwitch("remote-debugging-port", process.env.HUDD_CDP_PORT);
 }
 // ── All security theater off — nodeIntegration:true already grants full RCE ──
+// NOTE: bin/hudd.js passes these on the real command line (required for
+// pre-init flags like --no-sandbox whose checks run before JS loads).
+// appendSwitch below is belt-and-suspenders for direct `electron hud.js`.
 app.commandLine.appendSwitch("no-sandbox");
 app.commandLine.appendSwitch("disable-gpu-sandbox");
 app.commandLine.appendSwitch("disable-web-security");
