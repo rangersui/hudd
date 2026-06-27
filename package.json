@@ -1,7 +1,7 @@
 {
   "name": "@rangersui/hudd",
   "version": "0.1.0",
-  "description": "Desktop overlay daemon. Drop HTML files, widgets appear on screen.",
+  "description": "HUD daemon that also acts as a declarative native application framework.",
   "main": "hud.js",
   "bin": {
     "hudd": "bin/hudd.js",
