@@ -5,6 +5,7 @@ const os = require("os");
 
 app.commandLine.appendSwitch("remote-debugging-port", "9500");
 app.disableHardwareAcceleration();
+process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
 
 // ── Strip Chromium to a bare rendering shell ──
 // networking & telemetry
@@ -173,8 +174,14 @@ function createWidget(id, filepath, meta) {
   // right-click → DevTools
   win.webContents.on("context-menu", (_e, params) => {
     Menu.buildFromTemplate([
-      { label: `Inspect (${id})`, click: () => win.webContents.inspectElement(params.x, params.y) },
-      { label: "DevTools", click: () => win.webContents.toggleDevTools({ mode: "detach" }) },
+      { label: `Inspect (${id})`, click: () => {
+        if (!win.webContents.isDevToolsOpened()) win.webContents.openDevTools({ mode: "detach" });
+        win.webContents.inspectElement(params.x, params.y);
+      }},
+      { label: "DevTools", click: () => {
+        if (win.webContents.isDevToolsOpened()) win.webContents.closeDevTools();
+        else win.webContents.openDevTools({ mode: "detach" });
+      }},
       { type: "separator" },
       { label: "Reload", click: () => win.webContents.reload() },
       { label: "Close", click: () => { win.close(); delete widgets[id]; } },

@@ -5,39 +5,85 @@ description: Desktop overlay display daemon. Use when the task involves showing 
 
 # hudd
 
-Desktop overlay daemon. Drop HTML files → widgets appear on screen.
+Metadata-driven desktop overlay daemon. Drop HTML files → widgets appear on screen.
 
 ```bash
-hudd daemon     # start Electron with CDP on :9500
-hudsh ls            # list pages
-hudsh run overlay "document.title"   # evaluate JS
-hudd stop       # stop daemon
+hudd daemon             # start Electron with CDP on :9500
+hudsh ls                # list pages
+hudsh run <page> "code" # evaluate JS in a page
+hudd stop               # stop daemon
 ```
 
-hudd is a display-only daemon. It does not compute, scrape, or
-make decisions. It shows things on screen.
+hudd is a pure runtime shell. It loads HTML files, reads their `<meta name="hudd">` tag, and creates BrowserWindows accordingly. No widget names are hardcoded — the HTML file IS the widget.
 
-## Two ways to display
+## Core concept
 
-### 1. hooks/ directory (preferred)
-
-Write an HTML file → widget appears. Modify it → widget reloads.
-Delete it → widget disappears.
+One HTML file = one BrowserWindow = one CDP page.
 
 ```
-%LOCALAPPDATA%\hudd\hooks\
+overlay.html  →  BrowserWindow  →  [page] overlay
+mywidget.html →  BrowserWindow  →  [page] mywidget
 ```
 
-The hooks directory is at `%LOCALAPPDATA%\hudd\hooks\` on Windows,
-`~/hudd/hooks/` on other platforms. hudd watches this directory
-with `fs.watch` and auto-loads any `.html` file as a widget.
+Each page has its own DOM, JS context, and `window` object. `hudsh run <page>` executes JS in that specific page's context.
 
-```bash
-# Create a widget — just write a file
-cat > "$LOCALAPPDATA/hudd/hooks/cpu.html" << 'EOF'
+## Metadata
+
+Widgets declare their own layout via a meta tag in `<head>`:
+
+```html
+<meta name="hudd" content='{"width":400,"height":300,"position":"bottom-left","resizable":true}'>
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Widget ID (default: filename without .html) |
+| `type` | `"overlay"` | Fullscreen click-through mode |
+| `width`, `height` | number | Window size in px |
+| `position` | string | `top-left`, `top-right`, `bottom-left`, `bottom-right`, `bottom-center`, `center` |
+| `x`, `y` | number | Exact position (overrides position) |
+| `resizable` | boolean | Allow resize |
+| `trackPosition` | boolean | Emit `position-changed` on move/resize |
+| `webviewTag` | boolean | Enable `<webview>` tag |
+
+No meta tag → skipped in app dir, loaded with defaults in hooks dir.
+
+## Where widgets live
+
+### 1. App directory (alongside hud.js)
+
+Scanned once at boot. Only files with `<meta name="hudd">` are loaded. No file watching — restart to pick up changes. Widget ID = `meta.id` field, or filename without `.html`.
+
+This is where your core widgets go (overlay, analyzer, status, term, etc.).
+
+### 2. Hooks directory (hot-reload)
+
+```
+Windows:  %LOCALAPPDATA%\hudd\hooks\
+Other:    ~/hudd/hooks/
+```
+
+Scanned at boot + watched with `fs.watch`. Meta tag is optional (defaults applied). Widget ID = `hook-<filename>`.
+
+- `.html` → BrowserWindow widget
+- `.js` → `require()`'d in main process. Export a function or `{ dispose }` for cleanup on reload.
+
+Write a file → widget appears. Modify → reloads. Delete → closes. Any external process can drop files here without knowing hudd exists.
+
+### Common rules for both
+
+- `-webkit-app-region: drag` on the draggable element
+- `background: transparent` for see-through
+- `nodeIntegration: true` — `require('fs')`, `require('os')`, etc. work
+- Widgets are always-on-top, frameless, skip-taskbar
+
+### Example widget
+
+```html
 <!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
+<meta name="hudd" content='{"width":200,"height":60,"position":"top-right"}'>
 <title>cpu</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -50,41 +96,39 @@ cat > "$LOCALAPPDATA/hudd/hooks/cpu.html" << 'EOF'
 </style>
 </head>
 <body>
-<div class="content">
-  <div id="value">CPU: --</div>
-</div>
+<div class="content"><div id="value">CPU: --</div></div>
+<script>
+  const os = require('os');
+  setInterval(() => {
+    const cpus = os.cpus();
+    const idle = cpus.reduce((a, c) => a + c.times.idle, 0) / cpus.length;
+    const total = cpus.reduce((a, c) => a + Object.values(c.times).reduce((s,v) => s+v, 0), 0) / cpus.length;
+    document.getElementById('value').textContent = 'CPU: ' + Math.round(100 - idle/total*100) + '%';
+  }, 1000);
+</script>
 </body></html>
-EOF
-
-# Update it — overwrite the file, widget reloads
-# Delete it — rm the file, widget closes
 ```
-
-Rules for hook HTML files:
-- File name = widget ID (e.g., `cpu.html` → widget `hook-cpu`)
-- Include `-webkit-app-region: drag` on the element you want draggable
-- `background: transparent` if you want see-through
-- `nodeIntegration` is on — `require('fs')`, `require('os')` work
-- Widget is always-on-top, frameless, resizable, skip-taskbar
-
-This is the preferred method because it is completely decoupled — any
-process can write files. The writer does not need to know hudd
-exists. hudd does not need to know who wrote the file.
 
 ### 2. hudsh run (real-time)
 
-Evaluate JS in any page. Use for reading state, quick updates, or
-when you need the return value.
+Evaluate JS in any page via CDP. Use for reading state, quick updates, or when you need a return value.
 
 ```bash
-# Read
 hudsh run overlay "document.title"
-
-# Write to DOM
-hudsh run overlay "document.getElementById('focus-line').textContent = 'active'"
-
-# Return structured data
+hudsh run overlay "require('os').hostname()"
 hudsh run overlay "({ width: window.innerWidth, height: window.innerHeight })"
+```
+
+## Opening arbitrary HTML files
+
+Any HTML file can be opened as a widget:
+
+```bash
+# Via command line (single-instance — forwards to running hudd)
+electron hud.js /path/to/file.html
+
+# Via IPC from any page
+hudsh run overlay "require('electron').ipcRenderer.send('open-file', 'C:\\\\path\\\\to\\\\file.html')"
 ```
 
 ## Variable persistence
@@ -102,12 +146,11 @@ hudsh run overlay "window.counter"   # 1
 | `window.x = 1` | Yes | property on window object |
 | `var x = 1` | Yes | var hoists to window in sloppy mode |
 | `let x = 1` | No | block-scoped to the evaluate call |
-| `const x = 1` | No | block-scoped |
 | DOM changes | Yes | the DOM is the page |
 
-## Node.js in evaluate
+## Node.js in renderer
 
-`nodeIntegration` is on. `require()` works in evaluate:
+`nodeIntegration: true`, `contextIsolation: false`, `sandbox: false`. Full Node.js in every page:
 
 ```bash
 hudsh run overlay "require('os').hostname()"
@@ -115,42 +158,49 @@ hudsh run overlay "require('fs').readdirSync('.')"
 hudsh run overlay "require('child_process').execSync('dir', { encoding: 'utf-8' })"
 ```
 
-## Built-in pages
+## IPC (generic, zero widget names)
 
-hudd starts with four pages:
+All IPC is widget-agnostic. Available from any renderer via `require('electron').ipcRenderer`:
 
-| Page | Title | Purpose |
-|------|-------|---------|
-| overlay | `overlay` | Fullscreen transparent click-through — corner brackets, clock, detection boxes |
-| status | `status` | Small status panel — connection dots, focus line |
-| analyzer | `analyzer` | Screen analysis zone — resizable, reports bounds |
-| browser | `browser` | Webview with navigation chrome |
+| Channel | Direction | Description |
+|---------|-----------|-------------|
+| `minimize-widget` | send(id) | Hide widget |
+| `close-widget` | send(id) | Close and destroy widget |
+| `restore-widget` | send(id) | Show hidden widget |
+| `reopen-widget` | send(id) | Re-create a closed widget from its file |
+| `open-file` | send(path) | Open any HTML as a widget |
+| `create-widget` | send({id, filePath, ...meta}) | Create widget programmatically |
+| `set-bounds` | send({x, y, width, height}) | Resize/move calling window |
+| `set-ignore-mouse` | send(bool) | Toggle click-through on calling window |
+| `get-own-bounds` | invoke → {x,y,w,h} | Get calling window's bounds (scaled) |
+| `list-widgets` | invoke → {id: {visible}} | All loaded widgets |
+| `list-available` | invoke → {id: {file, dir, loaded}} | All widget files (loaded or not) |
+| `start-drag` | send({id, mouseX, mouseY}) | Begin custom drag (with `drag-move`/`drag-end`) |
 
 ## hudsh commands
 
 ```bash
-hudsh ls                    # list all pages
-hudsh run <page> <js>       # evaluate JS, print result
-hudsh status <page>         # JSON: title, type, dimensions, DOM nodes
-hudsh kill <page>           # close a page
-hudsh attach <page>         # open DevTools in browser
+hudsh ls                   # list all CDP page targets
+hudsh run <page> <js>      # evaluate JS, print result
+hudsh status <page>        # JSON: title, type, dimensions, DOM nodes
+hudsh kill <page>          # close a page
+hudsh attach <page>        # open Chrome DevTools for a page
 ```
+
+## Shortcuts
+
+- **F10** — restore all hidden widgets
+- **Right-click** any widget → context menu with Inspect / DevTools / Reload / Close
 
 ## Debugging
 
-Debug JS in DevTools, not from the outside:
-
+Or from CLI:
 ```bash
-hudsh attach overlay        # opens Chrome DevTools for overlay
+hudsh attach overlay       # opens Chrome DevTools for overlay
 ```
-
-Then use the Console tab to inspect, set breakpoints, profile.
-Do not debug JS through Python string wrappers.
 
 ## What not to do
 
 - Do not put business logic in hudd — it is a display
-- Do not compute, scrape, or make decisions here
-- Do not connect hudd to other daemons — it does not know they exist
-- Do not inject stealth JS — use a stealth browser for that
-- Do not debug JS from Python — use DevTools
+- Do not hardcode widget names in hud.js — the HTML file declares intent
+- Do not debug JS from Python string wrappers — use DevTools

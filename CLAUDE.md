@@ -65,7 +65,7 @@ hud.js is a pure runtime shell. Zero hardcoded widget names or positions.
 ## Dev commands
 
 ```bash
-npm install             # install electron + ws + xterm
+npm install             # install electron + ws
 npm link                # register hudd/hudsh globally
 hudd daemon             # start daemon (foreground)
 hudd stop               # stop daemon
@@ -83,4 +83,6 @@ Stripped to bare rendering shell. All unnecessary features disabled (sync, trans
 - Draggable headers: `-webkit-app-region: drag`
 - Transparent: `background: transparent` + `backgroundColor: "#00000000"`
 - Always-on-top, frameless, skip-taskbar
+- Right-click any widget → DevTools / Inspect / Reload / Close
+- F10 → restore all hidden widgets
 - IPC for internal lifecycle. External control via CDP or hooks dir.
