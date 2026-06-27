@@ -8,10 +8,11 @@ Metadata-driven desktop overlay daemon. Mechanism only, zero policy.
 hudd/
 ├── package.json        npm package — bin entries + dependencies
 ├── bin/
-│   ├── hudd.js         daemon CLI (start/stop)
+│   ├── hudd.js         daemon CLI (start/stop) + auth gateway
 │   └── hudsh.js        page CLI (run/ls/kill/status/attach)
 ├── lib/
-│   └── cdp.js          CDP HTTP + WebSocket helpers
+│   ├── cdp.js          CDP client with token auth
+│   └── gateway.js      CDP pipe → authenticated TCP gateway
 └── hud.js              Electron main process (pure runtime, zero widget names)
 ```
 
@@ -31,9 +32,26 @@ hud.js is a pure runtime shell. Provides mechanism, not policy. All behavior con
 - **broadcast()**: lifecycle events sent to ALL widgets, not targeted.
 - **Right-click → DevTools**: context menu on any widget for inspect/devtools/reload/close.
 
+## Security
+
+Electron runs with `--remote-debugging-pipe` — zero TCP ports from Chrome. The gateway process (`bin/hudd.js`) opens the TCP port with token auth.
+
+```
+client (hudsh) ─── Bearer token ──→ gateway :9500 ─── fd 3/4 pipe ──→ Electron
+                                    (bin/hudd.js)                     (no TCP)
+```
+
+- **Token**: `crypto.randomBytes(16)` (128-bit), stored in `daemon.json`
+- **Auth**: `Authorization: Bearer <token>` header, or `?token=` query (for DevTools)
+- **Comparison**: `crypto.timingSafeEqual` (constant-time)
+- **File protection**: DACL on Windows (`icacls OWNER RIGHTS`), chmod 700/600 on POSIX
+- **Duplicate guard**: daemon refuses to start if existing PID is alive
+- **DACL failure**: fatal — daemon exits if directory cannot be secured
+- **Renderer**: `nodeIntegration: true`, `sandbox: false`, `webSecurity: false` — full RCE by design. All Chromium security theater disabled.
+
 ## Key paths
 
-- **daemon.json**: `%LOCALAPPDATA%\hudd\daemon.json` — PID, port, app dir
+- **daemon.json**: `%LOCALAPPDATA%\hudd\daemon.json` — PID, port, token
 - **hooks dir**: `%LOCALAPPDATA%\hudd\hooks\` — drop HTML/JS here → auto-loads
 
 ## Widget IDs
@@ -98,8 +116,10 @@ No meta in hooks dir → defaults to `{ resizable: true }`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HUDD_CDP_PORT` | `9500` | Chrome DevTools Protocol port |
+| `HUDD_CDP_PORT` | — | Raw CDP port (dev mode, no auth, bypasses gateway) |
 | `HUDD_RESTORE_KEY` | `F10` | Global shortcut to restore all hidden widgets |
+| `HUDD_TOKEN` | — | Override token (client-side, for remote access) |
+| `HUDD_PORT` | — | Override gateway port (client-side) |
 
 ## Dev commands
 

@@ -2,7 +2,7 @@
 "use strict";
 
 const http = require("http");
-const { cdpList, findPage, cdpEval, getPort } = require("../lib/cdp");
+const { cdpList, findPage, cdpEval, getPort, getToken } = require("../lib/cdp");
 
 const VERSION = "0.1.0";
 
@@ -59,6 +59,7 @@ async function cmdRun(name, code) {
 
 async function cmdKill(name) {
   const port = getPort();
+  const token = getToken();
   const targets = await cdpList(port);
   const page = findPage(name, targets);
   if (!page) {
@@ -67,7 +68,12 @@ async function cmdKill(name) {
   }
   return new Promise((resolve, reject) => {
     http
-      .get(`http://127.0.0.1:${port}/json/close/${page.id}`, () => {
+      .get({
+        hostname: "127.0.0.1",
+        port,
+        path: `/json/close/${page.id}`,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      }, () => {
         console.log(`closed: ${name}`);
         resolve();
       })
@@ -110,13 +116,16 @@ async function cmdStatus(name) {
 
 async function cmdAttach(name) {
   const port = getPort();
+  const token = getToken();
   const targets = await cdpList(port);
   const page = findPage(name, targets);
   if (!page) {
     console.error(`ERR page '${name}' not found`);
     process.exit(1);
   }
-  const url = `http://127.0.0.1:${port}${page.devtoolsFrontendUrl || ""}`;
+  // DevTools URL with token for WebSocket auth
+  const wsAddr = `127.0.0.1:${port}/devtools/page/${page.id}?token=${token}`;
+  const url = `devtools://devtools/bundled/inspector.html?ws=${wsAddr}`;
   console.log(url);
   const { exec } = require("child_process");
   exec(`start "" "${url}"`);

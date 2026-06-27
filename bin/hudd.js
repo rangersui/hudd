@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 "use strict";
 
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-const { DAEMON_DIR, DAEMON_JSON, cdpList } = require("../lib/cdp");
+const crypto = require("crypto");
+const { DAEMON_DIR, DAEMON_JSON } = require("../lib/cdp");
+const { CDPGateway } = require("../lib/gateway");
 
 const VERSION = "0.1.0";
 const APP_DIR = path.join(__dirname, "..");
@@ -13,85 +15,127 @@ function usage() {
   console.log(`hudd ${VERSION} -- Electron CDP daemon
 
 Usage:
-  hudd daemon [--port N]    start Electron with CDP (default 9500)
+  hudd daemon [--port N]    start with auth gateway (default 9500)
   hudd stop                 stop daemon
   hudd -V                   version`);
 }
 
-async function waitForCDP(port, retries = 30) {
-  for (let i = 0; i < retries; i++) {
+// ── Security (copied from pythond) ──────────────────────
+
+function secureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+  if (process.platform === "win32") {
     try {
-      await cdpList(port);
-      return true;
-    } catch {
-      await new Promise((r) => setTimeout(r, 500));
+      execSync(
+        `icacls "${dirPath}" /inheritance:r ` +
+        `/grant:r "OWNER RIGHTS:(OI)(CI)(F)" ` +
+        `/grant:r "SYSTEM:(OI)(CI)(F)" ` +
+        `/grant:r "BUILTIN\\Administrators:(OI)(CI)(F)"`,
+        { stdio: "ignore", timeout: 10000 }
+      );
+    } catch (e) {
+      console.error(`FATAL: cannot set DACL on ${dirPath}: ${e.message}`);
+      process.exit(1);
     }
+  } else {
+    fs.chmodSync(dirPath, 0o700);
   }
-  return false;
 }
 
-async function daemon(port) {
-  // electron npm package exports the path to the binary
-  const electronPath = require("electron");
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
 
-  // update CDP port in hud.js if needed
-  const hudJs = path.join(APP_DIR, "hud.js");
-  if (fs.existsSync(hudJs)) {
-    let content = fs.readFileSync(hudJs, "utf-8");
-    const updated = content.replace(
-      /appendSwitch\("remote-debugging-port",\s*"\d+"\)/,
-      `appendSwitch("remote-debugging-port", "${port}")`
-    );
-    if (updated !== content) fs.writeFileSync(hudJs, updated, "utf-8");
+function writeDaemonMeta(port, token, pid) {
+  const data = { port, token, pid, started: new Date().toISOString() };
+  const tmp = DAEMON_JSON + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  if (process.platform !== "win32") {
+    fs.chmodSync(tmp, 0o600);
+  }
+  fs.renameSync(tmp, DAEMON_JSON);
+}
+
+// ── Daemon ──────────────────────────────────────────────
+
+async function daemon(port) {
+  const electronPath = require("electron");
+  const token = crypto.randomBytes(16).toString("hex");
+
+  secureDir(DAEMON_DIR);
+
+  // Check for existing daemon
+  if (fs.existsSync(DAEMON_JSON)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(DAEMON_JSON, "utf-8"));
+      if (existing.pid && pidAlive(existing.pid)) {
+        console.error(`ERR daemon already running (pid ${existing.pid}, port ${existing.port}). hudd stop first.`);
+        process.exit(1);
+      }
+    } catch {}
   }
 
-  fs.mkdirSync(DAEMON_DIR, { recursive: true });
-
-  const proc = spawn(electronPath, [APP_DIR], {
-    stdio: "ignore",
+  // Spawn Electron with --remote-debugging-pipe (no TCP port)
+  // fd 3 = pipe input (we write), fd 4 = pipe output (we read)
+  const proc = spawn(electronPath, [APP_DIR, "--remote-debugging-pipe"], {
+    stdio: ["ignore", "ignore", "inherit", "pipe", "pipe"],
     detached: false,
   });
 
-  const info = {
-    pid: proc.pid,
-    port,
-    app_dir: APP_DIR,
-    started: new Date().toISOString(),
-  };
-  fs.writeFileSync(DAEMON_JSON, JSON.stringify(info, null, 2));
+  writeDaemonMeta(port, token, proc.pid);
+
+  // Auth gateway: pipe ↔ authenticated TCP
+  let gateway;
+  await new Promise((resolve) => {
+    gateway = new CDPGateway({
+      pipeWrite: proc.stdio[3],
+      pipeRead: proc.stdio[4],
+      port,
+      token,
+      onReady: resolve,
+    });
+  });
 
   console.log(`hudd ${VERSION}`);
   console.log(`  app:      ${APP_DIR}`);
   console.log(`  electron: ${electronPath}`);
-  console.log(`  cdp:      http://127.0.0.1:${port}`);
+  console.log(`  gateway:  http://127.0.0.1:${port} (token auth)`);
   console.log(`  pid:      ${proc.pid}`);
   console.log(`  daemon:   ${DAEMON_JSON}`);
 
-  const ready = await waitForCDP(port);
-  if (ready) {
-    const pages = await cdpList(port);
+  // Wait for Electron to initialize
+  let pages = [];
+  for (let i = 0; i < 30; i++) {
+    try {
+      pages = await gateway.getTargets();
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  if (pages.length) {
     console.log(`  pages:    ${pages.length}`);
     pages.forEach((p) => console.log(`    [${p.type}] ${p.title}`));
     console.log();
     console.log("ready. ctrl+c to stop.");
   } else {
-    console.log("  WARNING: CDP not responding after 15s");
+    console.log("  WARNING: pipe not responding after 15s");
   }
 
-  // graceful shutdown
+  // Graceful shutdown
   const shutdown = () => {
+    gateway.close();
     proc.kill();
+    try { fs.unlinkSync(DAEMON_JSON); } catch {}
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
-  try {
-    process.on("SIGBREAK", shutdown);
-  } catch {}
+  try { process.on("SIGBREAK", shutdown); } catch {}
 
   proc.on("exit", () => {
-    try {
-      fs.unlinkSync(DAEMON_JSON);
-    } catch {}
+    gateway.close();
+    try { fs.unlinkSync(DAEMON_JSON); } catch {}
     console.log("electron exited.");
     process.exit(0);
   });
@@ -111,12 +155,10 @@ function stop() {
       console.log(`kill ${info.pid}: ${e.message}`);
     }
   }
-  try {
-    fs.unlinkSync(DAEMON_JSON);
-  } catch {}
+  try { fs.unlinkSync(DAEMON_JSON); } catch {}
 }
 
-// ── CLI ──
+// ── CLI ─────────────────────────────────────────────────
 const args = process.argv.slice(2);
 
 if (!args.length || args[0] === "-h" || args[0] === "--help") {

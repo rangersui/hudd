@@ -8,8 +8,8 @@ description: Desktop overlay display daemon. Use when the task involves showing 
 Metadata-driven desktop overlay daemon. Drop HTML files → widgets appear on screen.
 
 ```bash
-hudd daemon             # start Electron with CDP on :9500
-hudsh ls                # list pages
+hudd daemon             # start with auth gateway on :9500
+hudsh ls                # list pages (reads token from daemon.json)
 hudsh run <page> "code" # evaluate JS in a page
 hudd stop               # stop daemon
 ```
@@ -220,12 +220,30 @@ hudsh kill <page>          # close a page
 hudsh attach <page>        # open Chrome DevTools for a page
 ```
 
+## Security
+
+Electron runs with `--remote-debugging-pipe` — zero TCP ports from Chrome. The gateway process (`bin/hudd.js`) opens the only TCP port with token auth.
+
+```
+client (hudsh) ─── Bearer token ──→ gateway :9500 ─── fd 3/4 pipe ──→ Electron
+                                    (bin/hudd.js)                     (no TCP)
+```
+
+- **Token**: `crypto.randomBytes(16)`, stored in `daemon.json`
+- **Auth**: `Authorization: Bearer <token>` header (hudsh reads token from daemon.json automatically)
+- **File protection**: DACL on Windows, chmod 700/600 on POSIX
+- **Renderer**: `nodeIntegration: true`, `sandbox: false` — full RCE by design. Treat like SSH into a Node.js + DOM runtime.
+
+`hudsh` reads the token from `daemon.json` transparently — no manual token management needed.
+
 ## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HUDD_CDP_PORT` | `9500` | Chrome DevTools Protocol port |
+| `HUDD_CDP_PORT` | — | Raw CDP port (dev mode, no auth, bypasses gateway) |
 | `HUDD_RESTORE_KEY` | `F10` | Global shortcut to restore all hidden widgets |
+| `HUDD_TOKEN` | — | Override token (client-side, for remote access) |
+| `HUDD_PORT` | — | Override gateway port (client-side) |
 
 ## Shortcuts
 

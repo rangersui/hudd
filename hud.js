@@ -3,8 +3,11 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
-const CDP_PORT = process.env.HUDD_CDP_PORT || "9500";
-app.commandLine.appendSwitch("remote-debugging-port", CDP_PORT);
+// CDP: gateway passes --remote-debugging-pipe at spawn time.
+// Raw TCP port only if explicitly requested (dev mode, no auth).
+if (process.env.HUDD_CDP_PORT) {
+  app.commandLine.appendSwitch("remote-debugging-port", process.env.HUDD_CDP_PORT);
+}
 // ── All security theater off — nodeIntegration:true already grants full RCE ──
 app.commandLine.appendSwitch("no-sandbox");
 app.commandLine.appendSwitch("disable-gpu-sandbox");

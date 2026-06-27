@@ -3,8 +3,8 @@
 Programmable glass for the desktop. Drop HTML files → widgets appear on screen.
 
 ```bash
-hudd daemon              # start Electron + CDP on :9500
-hudsh ls                 # list pages
+hudd daemon              # start with auth gateway on :9500
+hudsh ls                 # list pages (reads token from daemon.json)
 hudsh run <page> "1+1"   # evaluate JS in a page
 hudd stop                # stop
 ```
@@ -61,12 +61,26 @@ Every window property is configurable via meta: `transparent`, `frame`, `hasShad
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HUDD_CDP_PORT` | `9500` | CDP port |
+| `HUDD_CDP_PORT` | — | Raw CDP port (dev mode, no auth, bypasses gateway) |
 | `HUDD_RESTORE_KEY` | `F10` | Restore-all shortcut |
+| `HUDD_TOKEN` | — | Override token (client-side, for remote access) |
+| `HUDD_PORT` | — | Override gateway port (client-side) |
 
 ## Persistent runtime
 
 Each widget is a long-lived Node.js process. Variables (`window.*`), connections, servers, timers persist across `hudsh run` calls. `hudsh run` is a function call into a live runtime, not a fresh script.
+
+## Security
+
+Electron runs with `--remote-debugging-pipe` — zero TCP ports from Chrome. The gateway process opens the only TCP port (default :9500) with token auth.
+
+```
+hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ Electron (no TCP)
+```
+
+- **Token**: 128-bit random, stored in `daemon.json` (DACL-protected on Windows, chmod 600 on POSIX)
+- **Auth**: `Authorization: Bearer <token>` — `hudsh` reads token from `daemon.json` automatically
+- **Renderer**: `nodeIntegration: true`, `sandbox: false` — full RCE by design. Treat like SSH into a Node.js + DOM runtime.
 
 ## Renderer environment
 
