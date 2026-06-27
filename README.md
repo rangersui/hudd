@@ -4,7 +4,7 @@
 
 <h1 align="center">hudd</h1>
 
-<p align="center">A display server where the rendering protocol is HTML and every window is a Node.js runtime.</p>
+<p align="center"><em>HUD daemon</em> — a display server where the rendering protocol is HTML and every window is a Node.js runtime.<br>Only hydrogen.</p>
 
 ```bash
 hudd daemon              # start
