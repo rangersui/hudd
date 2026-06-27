@@ -152,8 +152,6 @@ async function daemon(port) {
     "--disable-presentation-api",
     "--disable-remote-playback-api",
     "--disable-shared-workers",
-    "--disable-remote-fonts",
-    "--disable-webrtc-encryption",
     // renderer scheduling — keep widgets alive
     "--disable-hang-monitor",
     "--disable-ipc-flooding-protection",
@@ -211,7 +209,7 @@ async function daemon(port) {
       "GlobalMediaControls", "GlobalMediaControlsForCast",
       // web APIs with no HUD use case
       "OnDeviceWebSpeech", "WebUSB", "WebBluetooth", "WebNFC",
-      "IdleDetection", "SharedArrayBuffer", "Portals", "DirectSockets",
+      "IdleDetection", "Portals", "DirectSockets",
       "WindowPlacement", "ContactsManager", "ContentIndex",
       // media protection (not playback)
       "MediaSession", "MediaEngagement",
@@ -232,7 +230,7 @@ async function daemon(port) {
   // Spawn Electron with --remote-debugging-pipe (no TCP port)
   // fd 3 = pipe input (we write), fd 4 = pipe output (we read)
   const proc = spawn(electronPath, [APP_DIR, "--remote-debugging-pipe", ...chromiumFlags], {
-    stdio: ["ignore", "ignore", "inherit", "pipe", "pipe"],
+    stdio: ["ignore", "ignore", "inherit", "pipe", "pipe", "ipc"],
     detached: false,
   });
 
@@ -244,6 +242,7 @@ async function daemon(port) {
     gateway = new CDPGateway({
       pipeWrite: proc.stdio[3],
       pipeRead: proc.stdio[4],
+      proc,
       port,
       token,
       onReady: resolve,

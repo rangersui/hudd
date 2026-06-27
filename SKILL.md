@@ -1,6 +1,6 @@
 ---
 name: hudd
-description: Write native desktop applications as single HTML files with full Node.js access. Use this skill whenever the user wants a desktop widget, overlay, dashboard, system monitor, file browser, log viewer, database inspector, or any visual tool on their screen. Also use when the user says "show me", "display", "draw on screen", "overlay", "HUD", "widget", or wants to build a local GUI app without a framework. The output is one HTML file — drop it in a folder, it runs as a native app. No build step, no dependencies, no server.
+description: A HUD daemon that also acts as a declarative native application framework. One HTML file = one native app with full Node.js + DOM access. Use this skill whenever the user wants a desktop widget, overlay, dashboard, system monitor, file browser, log viewer, database inspector, any visual tool, a background service, or a packaged desktop application. Also use when the user says "show me", "display", "draw on screen", "overlay", "HUD", "widget", "native app", or wants to build a local GUI app. The output is one HTML file — drop it in a folder, it runs. No build step, no dependencies.
 ---
 
 # hudd
@@ -25,9 +25,38 @@ One HTML file = one OS window = one Node.js process with a DOM. `require()` and 
 </script>
 ```
 
-The runtime is persistent — variables, connections, servers, timers all survive. `hudsh run <page>` is a function call into a live process, not a fresh script.
+The runtime is persistent — variables, connections, servers, timers all survive. `hudsh run` is a function call into a live process, not a fresh script.
 
 The filesystem is deployment. Write a file → app appears. Delete → gone. No install, no build, no restart.
+
+## Choosing a runtime
+
+One daemon, two runtimes. Pick by whether the task needs a DOM:
+
+| | Main process | Widget process |
+|---|---|---|
+| Entry | `hudsh run "code"` | `hudsh run <page> "code"` |
+| Has DOM | No | Yes |
+| Lifecycle | Daemon lifetime | Widget lifetime (file exists → alive) |
+| Scope | One shared context | One context per HTML file |
+| Use for | Background servers, system tasks, shared state, data processing, automation | Visual tools — each file is one window doing one thing |
+
+**Main process** — pure Node.js, no window. `const/let/var` all persist. Use for anything that doesn't need to render: HTTP servers, database connections, file watchers, scheduled tasks, shared state that widgets read from. Equivalent to a persistent `node` REPL.
+
+**Widget process** — Node.js + DOM in one scope. One HTML file = one window = one concern. A CPU monitor is one file. A log viewer is one file. A database inspector is one file. Don't build one giant widget that does everything — split by concern, each file is small and focused. Widgets can talk to each other via IPC (`list-widgets`, `broadcast`) or via the main process (shared state in main, widgets read it).
+
+**Don't mix server and client in one widget.** `nodeIntegration: true` liberates the client — a widget can `require('fs')`, spawn processes, access hardware directly. It's a native app, not a browser tab. But that doesn't mean you should run `http.createServer()` inside a widget. A server's lifecycle shouldn't be tied to a window. Keep them separate: services go in main, visual goes in widgets.
+
+**Don't re-create the browser split.** The whole point of `nodeIntegration: true` is that the widget already has `require()`. If a widget needs data, it reads it directly — `require('fs')`, `require('better-sqlite3')`, `require('child_process')`. Do NOT start an HTTP server in main and then `fetch()` from a widget. That's re-introducing the exact client-server separation that hudd eliminates.
+
+```
+✗  main: http.createServer(handler)  →  widget: fetch('http://localhost:3000/data')
+✓  widget: require('better-sqlite3')('app.db').prepare('SELECT ...').all()
+```
+
+Widget-to-widget coordination uses IPC (`broadcast`, `list-widgets`) or shared state in the main context — not HTTP.
+
+When in doubt: if you need `document`, it's a widget. If you don't, it's main.
 
 ## Anatomy of a widget
 
@@ -216,21 +245,29 @@ Available via `require('electron').ipcRenderer`:
 | `list-widgets` | invoke → {id: {visible}} | All loaded widgets |
 | `list-available` | invoke → {id: {file, dir, loaded}} | All widget files |
 
-## hudsh — evaluate JS in running widgets
+## hudsh — evaluate JS in running processes
 
-Each widget is a persistent runtime. Variables, connections, servers, timers survive across calls:
+Two persistent runtimes, one `hudsh run` surface:
 
 ```bash
+# Main process — no DOM, pure Node.js, const/let/var all persist
+hudsh run "const x = 42"          # persists in vm context
+hudsh run "x + 1"                 # 43
+hudsh run "require('os').hostname()"
+hudsh run "const http = require('http')"
+hudsh run "http.createServer((q,s) => s.end('hi')).listen(3000)"
+
+# Widget process — Node.js + DOM, variables on window.*
+hudsh run work "window.x = 42"    # persists in renderer
+hudsh run work "window.x + 1"     # 43
+
 hudsh ls                          # list all widgets
-hudsh run <page> "code"           # evaluate JS, print result
-hudsh run work "window.x = 42"   # set a variable
-hudsh run work "window.x + 1"    # 43 — it persists
 hudsh status <page>               # JSON info
 hudsh kill <page>                 # close widget
 hudsh attach <page>               # open DevTools
 ```
 
-`hudsh run` is a function call into a live runtime, not a fresh script.
+`hudsh run` is a function call into a live process, not a fresh script. No page argument = main process. With page argument = that widget's renderer.
 
 ## Daemon
 
@@ -263,6 +300,34 @@ hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ El
 | `HUDD_TOKEN` | — | Override token (client-side) |
 | `HUDD_PORT` | — | Override gateway port (client-side) |
 
+## Distribution
+
+The hooks directory is your environment — copy it and you copy your entire toolset.
+
+**Share widgets** — send the HTML files. Recipient drops them in hooks dir, they appear.
+
+**Share an environment** — git repo with your hooks:
+
+```
+my-env/
+├── package.json        ← { "dependencies": { "@rangersui/hudd": "..." } }
+└── hooks/
+    ├── dashboard.html
+    ├── monitor.html
+    └── server.js       ← main process script
+```
+
+`git clone && npm install` — symlink or copy `hooks/` to `%LOCALAPPDATA%\hudd\hooks\` — `hudd daemon`
+
+**Package as standalone app** — hudd is Electron. Put widgets in the app directory (with `<meta name="hudd">`), run `npx electron-builder`. Output: `.exe` / `.dmg` / `.AppImage` — no Node.js or hudd needed on target machine. Your HTML files become a native desktop application.
+
+## Gotchas
+
+- **Native npm modules** (better-sqlite3, sharp, etc.) are compiled against a specific Node ABI. Electron bundles its own Node version, so native modules need `electron-rebuild` or `@electron/rebuild` to match. Pure JS packages (ws, lodash, etc.) work without rebuild.
+- **`localStorage` / `sessionStorage` / IndexedDB are disabled.** `require('fs')` is storage. `require('better-sqlite3')` is the database. If you try browser storage APIs, they silently fail.
+- **Meta JSON parse error** → `readMeta` returns `null` → widget skipped in app dir, loaded with defaults in hooks dir. No error message — check hud.log.
+- **`require()` of missing module** → renderer throws, widget shows blank. Not a crash — the process survives, other widgets unaffected. Check DevTools console (right-click → DevTools).
+
 ## Design principles
 
 - The HTML file IS the application. One file = one window = one process.
@@ -270,3 +335,4 @@ hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ El
 - Meta tag declares window intent. Undeclared fields fall through to defaults.
 - Hooks directory is the deployment target. Filesystem is the package manager.
 - hud.js is a pure runtime shell — mechanism only, zero policy. It doesn't know widget names, doesn't enforce structure, doesn't impose patterns. The widget decides everything about itself.
+- Can act as a declarative native application framework: HTML/CSS replaces Qt's QML/C++, meta tags replace window configuration code, `require()` replaces platform SDKs. No compilation, hot-reload, `electron-builder` for distribution.

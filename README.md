@@ -4,12 +4,13 @@
 
 <h1 align="center">hudd</h1>
 
-<p align="center">Programmable transparent glass for the desktop, with minimal Electron.<br>Only hydrogen.</p>
+<p align="center">A HUD daemon that also acts as a declarative native application framework.<br>One HTML file = one native app. No build, no config.</p>
 
 ```bash
 hudd daemon              # start with auth gateway on :9500
-hudsh ls                 # list pages (reads token from daemon.json)
-hudsh run <page> "1+1"   # evaluate JS in a page
+hudsh run "1+1"          # evaluate JS in main process (persistent, no DOM)
+hudsh run <page> "1+1"   # evaluate JS in a widget page
+hudsh ls                 # list pages
 hudd stop                # stop
 ```
 
@@ -81,7 +82,12 @@ Every window property is configurable via meta: `transparent`, `frame`, `hasShad
 
 ## Persistent runtime
 
-Each widget is a long-lived Node.js process. Variables (`window.*`), connections, servers, timers persist across `hudsh run` calls. `hudsh run` is a function call into a live runtime, not a fresh script.
+Two runtimes, one daemon:
+
+- **Main process** (`hudsh run "code"`): persistent `vm.createContext` — no DOM, pure Node.js. const/let/var all persist across calls.
+- **Widget processes** (`hudsh run <page> "code"`): each widget is a renderer with Node.js + DOM. Variables persist on `window.*`.
+
+`hudsh run` is a function call into a live process, not a fresh script.
 
 ## Security
 
@@ -111,7 +117,8 @@ hudsh ─── Bearer token ──→ gateway :9500 ─── pipe ──→ El
 
 ```
 hudsh ls                   list all pages
-hudsh run <page> <js>      evaluate JS, print result
+hudsh run <js>             evaluate JS in main process
+hudsh run <page> <js>      evaluate JS in a page
 hudsh status <page>        JSON info
 hudsh kill <page>          close a page
 hudsh attach <page>        open DevTools
@@ -124,6 +131,16 @@ git clone https://github.com/rangersui/hudd.git && cd hudd
 npm install
 npm link    # registers hudd + hudsh globally
 ```
+
+## Distribution
+
+The hooks directory is your environment. Three ways to share it:
+
+**Share widgets** — send HTML files. Recipient drops them in their hooks dir.
+
+**Share an environment** — git repo with your widgets + `package.json` that depends on hudd. `git clone && npm install && hudd daemon`.
+
+**Package as standalone app** — hudd is Electron. Put your widgets in the app directory (with `<meta name="hudd">`), run `npx electron-builder`. Output: `.exe` / `.dmg` / `.AppImage`. No Node.js, no hudd install needed on target machine.
 
 ## License
 

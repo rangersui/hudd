@@ -1,6 +1,6 @@
 # hudd
 
-Metadata-driven desktop overlay daemon. Mechanism only, zero policy.
+Declarative native application framework. Mechanism only, zero policy.
 
 ## Structure
 
@@ -29,6 +29,7 @@ hud.js is a pure runtime shell. Provides mechanism, not policy. All behavior con
 - **fs.watch on hooks**: drop/modify/delete → auto load/reload/unload.
 - **Single-instance**: second `electron hud.js file.html` forwards to running instance via `requestSingleInstanceLock`.
 - **Daemon mode**: stays alive with zero widgets — new widgets arrive via hooks dir, CLI, or IPC.
+- **Main eval**: persistent `vm.createContext` in the main process — windowless Node.js runtime. `hudsh run "code"` (no page arg) evals here via IPC through the gateway. const/let/var all persist across calls.
 - **Generic IPC**: `minimize-widget`, `close-widget`, `restore-widget`, `reopen-widget`, `open-file`, `set-bounds`, `get-own-bounds`, `list-widgets`, `list-available`, `set-ignore-mouse`. Zero widget-specific handlers.
 - **broadcast()**: lifecycle events sent to ALL widgets, not targeted.
 - **Right-click → DevTools**: context menu on any widget for inspect/devtools/reload/close.
@@ -165,16 +166,58 @@ npm link                # register hudd/hudsh globally
 hudd daemon             # start daemon (foreground)
 hudd stop               # stop daemon
 hudsh ls                # list CDP targets
+hudsh run "code"        # evaluate JS in main process (persistent, no DOM)
 hudsh run <page> "code" # evaluate JS in a page
 ```
 
-## Chromium
+## Chromium flags
 
-Stripped to bare rendering shell. All unnecessary features disabled (sync, translate, extensions, speech, print, WebRTC, notifications, safe browsing, privacy sandbox, etc.). ~65MB memory footprint.
+Scorched earth: kill protection layer, keep rendering layer. Flags are maintained in **two places** that must stay in sync:
+
+- `bin/hudd.js` — spawn command line (required for pre-init flags like `--no-sandbox`)
+- `hud.js` — `appendSwitch()` (belt-and-suspenders for direct `electron hud.js`)
+
+Same flags, different format. If you add/remove a flag, update both files.
 
 ## Persistent runtime
 
-Each widget is a long-lived Node.js process. `window.*` variables, `require()`'d modules, connections, servers, timers all persist across `hudsh run` calls. `hudsh run` is a function call into a live runtime, not a fresh script.
+Two persistent runtimes, one daemon:
+
+- **Main process** (`hudsh run "code"`): `vm.createContext` in Electron main process. No DOM. const/let/var all persist. Has access to `require`, Electron APIs (`app`, `BrowserWindow`, etc.), and hudd internals (`widgets`, `broadcast`). Routed via IPC through the gateway (`POST /json/eval`).
+- **Widget processes** (`hudsh run <page> "code"`): Each widget is a renderer with Node.js + DOM. Variables persist on `window.*`. Routed via CDP WebSocket.
+
+Both are function calls into live processes, not fresh scripts.
+
+**Decision rule**: needs `document` → widget (one HTML file = one concern). Doesn't need DOM → main process. Servers, shared state, system tasks, automation → main. Visual tools → widget, one file per tool, keep each small and focused. Don't run servers inside widgets — `nodeIntegration` liberates the client (filesystem, hardware, processes), not for hosting services. Widget = native client, main = server.
+
+## Extending hudd
+
+### Adding a new meta field
+
+1. Add to `DEFAULTS` or `OVERLAY_DEFAULTS` in `hud.js` (if it needs a default)
+2. Use `d.<field>` in `createWidget()` — the layering `{ ...DEFAULTS, ...OVERLAY_DEFAULTS, ...meta }` handles resolution
+3. Update meta tag table in CLAUDE.md, SKILL.md, README.md
+
+### Adding a new directory type
+
+Follow the hooks/external pattern: constant alongside `DATA_DIR`, `mkdirSync` in `whenReady`, `loadDir` with prefix, optionally `watchDir`. Update `list-available` and docs.
+
+### Do NOT add widget-specific IPC handlers
+
+hud.js is a pure runtime shell — zero widget names, zero widget-specific logic. If a widget needs custom behavior, it goes in the widget's own `<script>`, not in hud.js. All IPC channels are generic and widget-agnostic. Do not add `ipcMain.on("my-widget-does-x", ...)`.
+
+## Testing
+
+No automated test suite. Verify changes manually:
+
+```bash
+hudd daemon                    # start
+hudsh ls                       # all expected widgets listed?
+hudsh run <page> "1+1"         # CDP eval works?
+# drop a .html in hooks dir   # hot-reload works?
+# right-click a widget        # DevTools opens?
+hudd stop                      # clean shutdown?
+```
 
 ## Conventions
 

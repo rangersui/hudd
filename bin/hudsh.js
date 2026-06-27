@@ -2,7 +2,7 @@
 "use strict";
 
 const http = require("http");
-const { cdpList, findPage, cdpEval, getPort, getToken } = require("../lib/cdp");
+const { cdpList, findPage, cdpEval, cdpMainEval, getPort, getToken } = require("../lib/cdp");
 
 const VERSION = "0.1.0";
 
@@ -10,6 +10,7 @@ function usage() {
   console.log(`hudsh -- client for hudd pages
 
 Usage:
+  hudsh run <js>            evaluate JS in main process (no DOM, persistent)
   hudsh run <page> <js>     evaluate JS in a page
   hudsh ls                  list pages
   hudsh kill <page>         close a page
@@ -44,6 +45,21 @@ async function cmdRun(name, code) {
   }
 
   const result = await cdpEval(page.webSocketDebuggerUrl, code);
+  if (result && typeof result === "object" && "error" in result) {
+    console.error(`ERR ${result.error}`);
+    process.exit(1);
+  }
+  if (result !== null && result !== undefined) {
+    if (typeof result === "object") {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(result);
+    }
+  }
+}
+
+async function cmdRunMain(code) {
+  const result = await cdpMainEval(code);
   if (result && typeof result === "object" && "error" in result) {
     console.error(`ERR ${result.error}`);
     process.exit(1);
@@ -154,10 +170,16 @@ if (args[0] === "-V" || args[0] === "--version") {
         break;
       case "run":
         if (!args[1]) {
-          console.error("ERR: hudsh run <page> <js>");
+          console.error("ERR: hudsh run [page] <js>");
           process.exit(1);
         }
-        await cmdRun(args[1], args.slice(2).join(" "));
+        if (!args[2]) {
+          // hudsh run "code" — main process eval (no page specified)
+          await cmdRunMain(args[1]);
+        } else {
+          // hudsh run <page> "code" — page eval
+          await cmdRun(args[1], args.slice(2).join(" "));
+        }
         break;
       case "kill":
         if (!args[1]) {

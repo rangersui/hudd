@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, screen, globalShortcut, Menu } = require("e
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const vm = require("vm");
 
 // CDP: gateway passes --remote-debugging-pipe at spawn time.
 // Raw TCP port only if explicitly requested (dev mode, no auth).
@@ -80,8 +81,6 @@ app.commandLine.appendSwitch("disable-notifications");
 app.commandLine.appendSwitch("disable-presentation-api");
 app.commandLine.appendSwitch("disable-remote-playback-api");
 app.commandLine.appendSwitch("disable-shared-workers");
-app.commandLine.appendSwitch("disable-remote-fonts");
-app.commandLine.appendSwitch("disable-webrtc-encryption");
 
 // ── Renderer scheduling — keep widgets alive ──
 app.commandLine.appendSwitch("disable-hang-monitor");
@@ -145,7 +144,7 @@ app.commandLine.appendSwitch("disable-features", [
   "GlobalMediaControls", "GlobalMediaControlsForCast",
   // web APIs with no HUD use case (Node equivalents or irrelevant)
   "OnDeviceWebSpeech", "WebUSB", "WebBluetooth", "WebNFC",
-  "IdleDetection", "SharedArrayBuffer", "Portals", "DirectSockets",
+  "IdleDetection", "Portals", "DirectSockets",
   "WindowPlacement", "ContactsManager", "ContentIndex",
   // media protection (not playback — keep MediaStream, Web Audio, <video>)
   "MediaSession", "MediaEngagement",
@@ -636,3 +635,45 @@ ipcMain.on("start-drag", (e, { id, mouseX, mouseY }) => {
 
 app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => { /* daemon stays alive — widgets arrive via hooks, CLI, or IPC */ });
+
+// ════════════════════════════════════════════
+// MAIN EVAL — persistent, windowless Node.js runtime
+// ════════════════════════════════════════════
+// vm.createContext gives a persistent context where const/let/var all
+// survive across runInContext calls (same as Node.js REPL internals).
+// No window, no DOM — pure Node.js.  Gateway routes here via IPC.
+
+const mainContext = vm.createContext({
+  require, console, process, Buffer,
+  setTimeout, setInterval, setImmediate,
+  clearTimeout, clearInterval, clearImmediate,
+  URL, URLSearchParams, TextEncoder, TextDecoder,
+  queueMicrotask,
+  // Electron main-process APIs
+  app, BrowserWindow, screen, ipcMain, Menu, globalShortcut,
+  // hudd runtime — inspect and control widgets from main context
+  widgets, broadcast, log,
+});
+mainContext.global = mainContext;
+
+if (typeof process.send === "function") {
+  process.on("message", async (msg) => {
+    if (msg?.type !== "main-eval") return;
+    try {
+      let result = vm.runInContext(msg.code, mainContext);
+      if (result != null && typeof result.then === "function") result = await result;
+      if (result === undefined) {
+        process.send({ type: "main-eval-result", id: msg.id });
+      } else {
+        try {
+          JSON.stringify(result);  // verify serializable (IPC uses JSON)
+          process.send({ type: "main-eval-result", id: msg.id, value: result });
+        } catch {
+          process.send({ type: "main-eval-result", id: msg.id, value: require("util").inspect(result) });
+        }
+      }
+    } catch (e) {
+      process.send({ type: "main-eval-result", id: msg.id, error: e.stack || String(e) });
+    }
+  });
+}
