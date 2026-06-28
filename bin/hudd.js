@@ -161,15 +161,23 @@ async function daemon(port) {
     "--disable-back-forward-cache",
     "--disable-lazy-loading",
     "--disable-scroll-to-text-fragment",
-    // GPU
-    "--disable-gpu-compositing",
-    "--disable-gpu-early-init",
-    "--in-process-gpu",
-    // renderer internals — trim rasterization overhead
+    // GPU — rendering layer, stays ON.
+    // GPU acceleration is rendering infrastructure, not a protection layer.
+    // Disabling it forces CPU software rasterization: slower, higher memory,
+    // and in-process-gpu folds GPU work into the main process (bloating it
+    // by 100-150 MB). Let the GPU run out-of-process where it belongs.
+    //
+    // Removed (were killing rendering):
+    //   --disable-gpu-compositing   → forced software compositing
+    //   --disable-gpu-early-init    → delayed GPU, caused first-frame jank
+    //   --in-process-gpu            → folded GPU into main (+150MB)
+    //   --disable-composited-antialiasing → killed composite layer AA
+    //   --disable-oop-rasterization → pulled raster back to main thread
+    "--disable-direct-composition-video-overlays",  // AMD driver spams E_INVALIDARG on VideoProcessorGetOutputExtension
+    "--log-level=3",  // fatal only — suppress GPU driver noise
+    // renderer internals
     "--disable-checker-imaging",
     "--disable-image-animation-resync",
-    "--disable-composited-antialiasing",
-    "--disable-oop-rasterization",
     // A/B experiments — kill the entire framework
     "--force-fieldtrials=*/*",
     "--disable-field-trial-config",

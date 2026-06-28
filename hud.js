@@ -40,7 +40,6 @@ app.commandLine.appendSwitch("allow-insecure-localhost");
 app.commandLine.appendSwitch("ignore-certificate-errors");
 app.commandLine.appendSwitch("disable-popup-blocking");
 app.commandLine.appendSwitch("disable-prompt-on-repost");
-app.disableHardwareAcceleration();
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
 
 // ── Protection layer: storage sandbox ──
@@ -92,16 +91,18 @@ app.commandLine.appendSwitch("disable-back-forward-cache");
 app.commandLine.appendSwitch("disable-lazy-loading");
 app.commandLine.appendSwitch("disable-scroll-to-text-fragment");
 
-// ── GPU — already off via disableHardwareAcceleration ──
-app.commandLine.appendSwitch("disable-gpu-compositing");
-app.commandLine.appendSwitch("disable-gpu-early-init");
-app.commandLine.appendSwitch("in-process-gpu");
+// ── GPU — rendering layer, stays ON ──
+// GPU acceleration is rendering infrastructure, not a protection layer.
+// Disabling it forces CPU software rasterization: slower, higher memory,
+// and in-process-gpu folds GPU work into the main process (bloating it
+// by 100-150 MB). Let the GPU run out-of-process where it belongs.
+app.commandLine.appendSwitch("disable-gpu-sandbox");  // already set above, harmless duplicate
+app.commandLine.appendSwitch("disable-direct-composition-video-overlays");  // AMD driver spams E_INVALIDARG on VideoProcessorGetOutputExtension
+app.commandLine.appendSwitch("log-level", "3");  // fatal only — suppress GPU driver noise
 
-// ── Renderer internals — trim rasterization overhead ──
+// ── Renderer internals ──
 app.commandLine.appendSwitch("disable-checker-imaging");
 app.commandLine.appendSwitch("disable-image-animation-resync");
-app.commandLine.appendSwitch("disable-composited-antialiasing");
-app.commandLine.appendSwitch("disable-oop-rasterization");
 
 // ── A/B experiments — kill the entire framework ──
 app.commandLine.appendSwitch("force-fieldtrials", "*/*");
@@ -543,8 +544,14 @@ ipcMain.on("set-ignore-mouse", (e, ignore) => {
 ipcMain.on("set-bounds", (e, bounds) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   if (!win || win.isDestroyed()) return;
-  if (bounds.width && bounds.height) win.setSize(bounds.width, bounds.height);
-  if (bounds.x != null && bounds.y != null) win.setPosition(bounds.x, bounds.y);
+  // Atomic: position + size in one call to avoid flicker
+  const cur = win.getBounds();
+  win.setBounds({
+    x:      bounds.x      ?? cur.x,
+    y:      bounds.y      ?? cur.y,
+    width:  bounds.width  ?? cur.width,
+    height: bounds.height ?? cur.height,
+  });
 });
 
 ipcMain.handle("get-own-bounds", (e) => {
