@@ -313,7 +313,12 @@ function stop() {
     console.log("no daemon running");
     return;
   }
-  const info = JSON.parse(fs.readFileSync(DAEMON_JSON, "utf-8"));
+  let info = {};
+  try {
+    info = JSON.parse(fs.readFileSync(DAEMON_JSON, "utf-8"));
+  } catch (e) {
+    console.log(`invalid daemon metadata: ${e.message}`);
+  }
   if (info.pid) {
     try {
       process.kill(info.pid, "SIGTERM");

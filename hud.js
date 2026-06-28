@@ -203,6 +203,22 @@ function readMeta(filepath) {
   } catch { return null; }
 }
 
+function loadWidgetFile(win, id, filepath) {
+  const onError = (err) => {
+    log(`[loadFile] FAILED ${id} from ${filepath}:`, err && (err.stack || err.message || err));
+  };
+  try {
+    const result = win.loadFile(filepath, { query: { id } });
+    if (result && typeof result.catch === "function") result.catch(onError);
+  } catch (err) {
+    onError(err);
+  }
+}
+
+function validNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function resolveMeta(meta) {
   const display = screen.getPrimaryDisplay();
 
@@ -305,7 +321,7 @@ function createWidget(id, filepath, meta, { untrusted = false } = {}) {
   if (d.clickThrough) win.setIgnoreMouseEvents(true, { forward: true });
   if (d.alwaysOnTop) win.setAlwaysOnTop(true, d.level);
 
-  win.loadFile(filepath, { query: { id } });
+  loadWidgetFile(win, id, filepath);
   widgets[id] = win;
   log(`created ${id}`);
   win.once("ready-to-show", () => win.showInactive());
@@ -418,13 +434,17 @@ function handleChange(dir, filename, prefix, { untrusted = false } = {}) {
 
   // existing widget — just reload content
   if (widgets[id]) {
-    widgets[id].loadFile(filepath, { query: { id } });
+    loadWidgetFile(widgets[id], id, filepath);
     return;
   }
 
   // new file — create
   const meta = readMeta(filepath);
-  createWidget(id, filepath, meta || { resizable: true }, { untrusted });
+  try {
+    createWidget(id, filepath, meta || { resizable: true }, { untrusted });
+  } catch (err) {
+    log(`[loadDir] FAILED to create ${id} from ${filename}:`, err && (err.stack || err.message || err));
+  }
 }
 
 function watchDir(dir, prefix, { untrusted = false } = {}) {
@@ -452,6 +472,7 @@ function broadcast(event, ...args) {
 // ════════════════════════════════════════════
 
 function openFile(filepath) {
+  if (typeof filepath !== "string" || !filepath) return;
   filepath = path.resolve(filepath);
   if (!filepath.endsWith(".html") || !fs.existsSync(filepath)) return;
   const basename = path.basename(filepath, ".html");
@@ -462,7 +483,11 @@ function openFile(filepath) {
     return;
   }
   const meta = readMeta(filepath) || { resizable: true };
-  createWidget(basename, filepath, meta);
+  try {
+    createWidget(basename, filepath, meta);
+  } catch (err) {
+    log(`[openFile] FAILED to create ${basename} from ${filepath}:`, err && (err.stack || err.message || err));
+  }
 }
 
 function parseFilesFromArgv(argv) {
@@ -494,16 +519,29 @@ app.whenReady().then(() => {
   const SENSITIVE = new Set(["media", "display-capture", "geolocation"]);
   const FRIENDLY  = { media: "camera/microphone", "display-capture": "screen capture", geolocation: "location" };
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => {
-    if (!SENSITIVE.has(perm)) return cb(true);
+    let replied = false;
+    const reply = (allow) => {
+      if (replied) return;
+      replied = true;
+      try { cb(allow); } catch {}
+    };
+    if (!SENSITIVE.has(perm)) return reply(true);
     const win = BrowserWindow.fromWebContents(wc);
     const title = (win && !win.isDestroyed() && win.getTitle()) || "Widget";
-    dialog.showMessageBox(win, {
+    const owner = win && !win.isDestroyed() ? win : undefined;
+    const options = {
       type: "question",
       buttons: ["Allow", "Deny"],
       defaultId: 0,
       title: "Permission request",
       message: `"${title}" wants access to ${FRIENDLY[perm] || perm}.`,
-    }).then(({ response }) => cb(response === 0));
+    };
+    const request = owner ? dialog.showMessageBox(owner, options) : dialog.showMessageBox(options);
+    request.then(({ response }) => reply(response === 0))
+      .catch((err) => {
+        log(`[permission] denied ${perm}:`, err && (err.stack || err.message || err));
+        reply(false);
+      });
   });
   loadDir(__dirname, { prefix: null, defaultOnNoMeta: false });
 
@@ -550,7 +588,24 @@ ipcMain.on("restore-widget", (_e, id) => {
 });
 
 ipcMain.on("create-widget", (_e, data) => {
-  createWidget(data.id, data.filePath || path.join(__dirname, data.htmlFile), data);
+  if (!data || typeof data !== "object" || typeof data.id !== "string" || !data.id) {
+    log("[IPC] ignored create-widget with invalid payload");
+    return;
+  }
+  const filepath = typeof data.filePath === "string"
+    ? data.filePath
+    : typeof data.htmlFile === "string"
+      ? path.join(__dirname, data.htmlFile)
+      : null;
+  if (!filepath) {
+    log(`[IPC] ignored create-widget ${data.id}: missing filePath/htmlFile`);
+    return;
+  }
+  try {
+    createWidget(data.id, filepath, data);
+  } catch (err) {
+    log(`[IPC] FAILED create-widget ${data.id}:`, err && (err.stack || err.message || err));
+  }
 });
 
 ipcMain.on("open-file", (_e, filepath) => {
@@ -564,14 +619,14 @@ ipcMain.on("set-ignore-mouse", (e, ignore) => {
 
 ipcMain.on("set-bounds", (e, bounds) => {
   const win = BrowserWindow.fromWebContents(e.sender);
-  if (!win || win.isDestroyed()) return;
+  if (!win || win.isDestroyed() || !bounds || typeof bounds !== "object") return;
   // Atomic: position + size in one call to avoid flicker
   const cur = win.getBounds();
   win.setBounds({
-    x:      bounds.x      ?? cur.x,
-    y:      bounds.y      ?? cur.y,
-    width:  bounds.width  ?? cur.width,
-    height: bounds.height ?? cur.height,
+    x:      validNumber(bounds.x) ? bounds.x : cur.x,
+    y:      validNumber(bounds.y) ? bounds.y : cur.y,
+    width:  validNumber(bounds.width) && bounds.width > 0 ? bounds.width : cur.width,
+    height: validNumber(bounds.height) && bounds.height > 0 ? bounds.height : cur.height,
   });
 });
 
@@ -646,11 +701,17 @@ ipcMain.on("reopen-widget", (_e, id) => {
   }
 });
 
-ipcMain.on("start-drag", (e, { id, mouseX, mouseY }) => {
+ipcMain.on("start-drag", (e, data) => {
+  if (!data || typeof data !== "object") return;
+  const { id, mouseX, mouseY } = data;
+  if (typeof id !== "string" || !validNumber(mouseX) || !validNumber(mouseY)) return;
   const win = widgets[id];
   if (!win) return;
   const [wx, wy] = win.getPosition();
-  const move = (_e2, { x, y }) => win.setPosition(wx + x - mouseX, wy + y - mouseY);
+  const move = (_e2, pos) => {
+    if (!pos || typeof pos !== "object" || !validNumber(pos.x) || !validNumber(pos.y)) return;
+    if (!win.isDestroyed()) win.setPosition(wx + pos.x - mouseX, wy + pos.y - mouseY);
+  };
   const cleanup = () => {
     ipcMain.removeListener("drag-move", move);
     ipcMain.removeListener("drag-end", cleanup);
