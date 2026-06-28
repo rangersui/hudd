@@ -1,8 +1,67 @@
+/** @type {import("electron")} */
 const { app, BrowserWindow, ipcMain, screen, globalShortcut, Menu, dialog, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const vm = require("vm");
+
+// ════════════════════════════════════════════
+// TYPE DEFINITIONS
+// ════════════════════════════════════════════
+
+/**
+ * Widget meta from `<meta name="hudd" content='...'>`.
+ * Every field is optional — DEFAULTS fills gaps.
+ * @typedef {object} WidgetMeta
+ * @property {string}  [id]              - Explicit widget ID (app-dir only; hooks use prefix+filename)
+ * @property {string}  [type]            - "overlay" for fullscreen transparent layer
+ * @property {number}  [width]
+ * @property {number}  [height]
+ * @property {number}  [x]               - Absolute screen X (overrides position)
+ * @property {number}  [y]               - Absolute screen Y (overrides position)
+ * @property {string}  [position]        - "top-left"|"top-right"|"bottom-left"|"bottom-right"|"bottom-center"|"center"
+ * @property {number}  [pad]             - Edge padding in px
+ * @property {number}  [inset]           - Overlay edge inset (default 1)
+ * @property {boolean} [resizable]
+ * @property {boolean} [movable]
+ * @property {boolean} [focusable]
+ * @property {boolean} [hasShadow]
+ * @property {boolean} [clickThrough]
+ * @property {boolean} [trackPosition]   - Emit "position-changed" on move/resize
+ * @property {boolean} [webviewTag]      - Enable <webview> in this widget
+ * @property {boolean} [transparent]     - Transparent window (default true)
+ * @property {boolean} [frame]           - Show native window frame (default false)
+ * @property {boolean} [roundedCorners]  - OS-level rounded corners (default false)
+ * @property {string}  [backgroundColor] - Window background color (default "#00000000")
+ * @property {string}  [windowType]      - BrowserWindow type (default "toolbar")
+ * @property {boolean} [alwaysOnTop]     - Keep above other windows (default true)
+ * @property {boolean} [skipTaskbar]     - Hide from OS taskbar (default true)
+ * @property {string}  [level]           - alwaysOnTop level (default "pop-up-menu")
+ * @property {number}  [minWidth]        - Minimum width when resizable (default 200)
+ * @property {number}  [minHeight]       - Minimum height when resizable (default 120)
+ */
+
+/**
+ * Info returned by `list-widgets` IPC handle.
+ * @typedef {object} WidgetInfo
+ * @property {boolean} visible
+ */
+
+/**
+ * Info returned by `list-available` IPC handle.
+ * @typedef {object} AvailableInfo
+ * @property {string}  file      - Filename (e.g. "explorer.html")
+ * @property {string}  dir       - Directory path
+ * @property {boolean} loaded    - Whether widget is currently in `widgets` map
+ * @property {boolean} [untrusted] - True for external dir widgets
+ */
+
+/**
+ * Loaded script entry.
+ * @typedef {object} ScriptEntry
+ * @property {string}   path    - Absolute filepath
+ * @property {Function} [dispose] - Cleanup function called on unload
+ */
 
 // CDP: gateway passes --remote-debugging-pipe at spawn time.
 // Raw TCP port only if explicitly requested (dev mode, no auth).
@@ -167,8 +226,10 @@ app.commandLine.appendSwitch("disable-blink-features", [
   "ComputePressure",
 ].join(","));
 
-const widgets = {};  // id -> BrowserWindow
+/** @type {Record<string, Electron.BrowserWindow>} */
+const widgets = {};
 const _log = fs.createWriteStream(path.join(__dirname, "hud.log"), { flags: "w" });
+/** @param {...any} args */
 function log(...args) { _log.write(new Date().toISOString() + " " + args.join(" ") + "\n"); }
 
 // ── Configurable defaults — meta tags override any of these ──
@@ -192,6 +253,11 @@ const OVERLAY_DEFAULTS = {
 // METADATA
 // ════════════════════════════════════════════
 
+/**
+ * Parse `<meta name="hudd" content='...'>` from the first 2KB of an HTML file.
+ * @param {string} filepath - Absolute path to .html file
+ * @returns {WidgetMeta | null} Parsed meta or null if missing/invalid
+ */
 function readMeta(filepath) {
   try {
     const head = fs.readFileSync(filepath, "utf-8").slice(0, 2000);
@@ -203,6 +269,13 @@ function readMeta(filepath) {
   } catch { return null; }
 }
 
+/**
+ * Load (or reload) an HTML file into a widget window. Catches both
+ * sync throws and async rejections (e.g. file deleted mid-save).
+ * @param {Electron.BrowserWindow} win
+ * @param {string} id   - Widget ID (for logging)
+ * @param {string} filepath - Absolute path to .html
+ */
 function loadWidgetFile(win, id, filepath) {
   const onError = (err) => {
     log(`[loadFile] FAILED ${id} from ${filepath}:`, err && (err.stack || err.message || err));
@@ -215,10 +288,21 @@ function loadWidgetFile(win, id, filepath) {
   }
 }
 
+/**
+ * Type guard: value is a finite number (rejects NaN, Infinity, non-numbers).
+ * @param {*} value
+ * @returns {value is number}
+ */
 function validNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+/**
+ * Resolve widget position and size from meta declaration.
+ * Handles overlay fullscreen, named positions, and cascade fallback.
+ * @param {WidgetMeta} meta
+ * @returns {WidgetMeta & {width: number, height: number, x: number, y: number}}
+ */
 function resolveMeta(meta) {
   const display = screen.getPrimaryDisplay();
 
@@ -262,6 +346,16 @@ function resolveMeta(meta) {
 // WIDGET FACTORY
 // ════════════════════════════════════════════
 
+/**
+ * Create a BrowserWindow and load an HTML widget into it.
+ * Trusted widgets get full Node.js access; untrusted are sandboxed.
+ * @param {string} id           - Unique widget ID
+ * @param {string} filepath     - Absolute path to .html file
+ * @param {WidgetMeta} meta     - Position/size/behavior from `<meta name="hudd">`
+ * @param {object} [opts]
+ * @param {boolean} [opts.untrusted=false] - Sandbox the renderer (no Node.js)
+ * @returns {Electron.BrowserWindow}
+ */
 function createWidget(id, filepath, meta, { untrusted = false } = {}) {
   if (widgets[id]) return widgets[id];
 
@@ -356,8 +450,17 @@ function createWidget(id, filepath, meta, { untrusted = false } = {}) {
 // LOADING
 // ════════════════════════════════════════════
 
-const scripts = {};  // id -> { module, dispose }
+/** @type {Record<string, ScriptEntry>} */
+const scripts = {};
 
+/**
+ * Scan a directory for .html widgets and .js scripts, loading each.
+ * @param {string} dir   - Directory to scan
+ * @param {object} [opts]
+ * @param {string|null} [opts.prefix]  - ID prefix (e.g. "hook-")
+ * @param {boolean} [opts.defaultOnNoMeta] - Create widget even without `<meta name="hudd">`
+ * @param {boolean} [opts.untrusted=false] - Sandbox renderers
+ */
 function loadDir(dir, opts = {}) {
   const { prefix, defaultOnNoMeta, untrusted = false } = opts;
 
@@ -392,6 +495,12 @@ function loadDir(dir, opts = {}) {
   }
 }
 
+/**
+ * Load a .js hook script into the main process. If the module exports
+ * a function, it's stored as the dispose callback for hot-unload.
+ * @param {string} id       - Script ID (prefix + filename without .js)
+ * @param {string} filepath - Absolute path
+ */
 function loadScript(id, filepath) {
   try {
     const resolved = require.resolve(filepath);
@@ -404,6 +513,10 @@ function loadScript(id, filepath) {
   }
 }
 
+/**
+ * Unload a script: call its dispose function and purge from require cache.
+ * @param {string} id
+ */
 function unloadScript(id) {
   const s = scripts[id];
   if (!s) return;
@@ -413,6 +526,15 @@ function unloadScript(id) {
   log(`[loadDir] script ${id} unloaded`);
 }
 
+/**
+ * Handle a file change detected by fs.watch. Reloads existing widgets,
+ * creates new ones, or removes widgets whose files were deleted.
+ * @param {string} dir      - Watched directory
+ * @param {string} filename - Changed filename (e.g. "explorer.html")
+ * @param {string} prefix   - ID prefix for this directory
+ * @param {object} [opts]
+ * @param {boolean} [opts.untrusted=false]
+ */
 function handleChange(dir, filename, prefix, { untrusted = false } = {}) {
   const filepath = path.join(dir, filename);
 
@@ -447,6 +569,14 @@ function handleChange(dir, filename, prefix, { untrusted = false } = {}) {
   }
 }
 
+/**
+ * Watch a directory for .html/.js changes and hot-reload.
+ * Debounces events by 100ms to avoid mid-save partial reads.
+ * @param {string} dir
+ * @param {string} prefix
+ * @param {object} [opts]
+ * @param {boolean} [opts.untrusted=false]
+ */
 function watchDir(dir, prefix, { untrusted = false } = {}) {
   const timers = {};
   fs.watch(dir, (_event, filename) => {
@@ -461,6 +591,11 @@ function watchDir(dir, prefix, { untrusted = false } = {}) {
 // EVENTS — broadcast to all widgets
 // ════════════════════════════════════════════
 
+/**
+ * Send an IPC event to all live widget renderers.
+ * @param {string} event - Channel name
+ * @param {...any} args  - Event payload
+ */
 function broadcast(event, ...args) {
   for (const win of Object.values(widgets)) {
     if (!win.isDestroyed()) win.webContents.send(event, ...args);
@@ -471,6 +606,11 @@ function broadcast(event, ...args) {
 // OPEN FILE — any .html becomes a widget
 // ════════════════════════════════════════════
 
+/**
+ * Open any .html file as a widget. Reuses existing window if the
+ * same basename is already loaded. ID = bare filename (no prefix).
+ * @param {string} filepath - Absolute or relative path to .html
+ */
 function openFile(filepath) {
   if (typeof filepath !== "string" || !filepath) return;
   filepath = path.resolve(filepath);
@@ -490,6 +630,10 @@ function openFile(filepath) {
   }
 }
 
+/**
+ * Open .html files passed on the command line (argv[1:]).
+ * @param {string[]} argv
+ */
 function parseFilesFromArgv(argv) {
   // argv: [electron, hud.js, ...files] or [hudd.exe, ...files]
   for (const arg of argv.slice(1)) {

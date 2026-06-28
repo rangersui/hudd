@@ -22,6 +22,11 @@ Usage:
 
 // ── Security (copied from pythond) ──────────────────────
 
+/**
+ * Create a directory and lock its ACL so only the owner, SYSTEM, and
+ * Administrators can access it. Equivalent to chmod 700 on POSIX.
+ * @param {string} dirPath
+ */
 function secureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
   if (process.platform === "win32") {
@@ -42,10 +47,22 @@ function secureDir(dirPath) {
   }
 }
 
+/**
+ * Check if a process is alive (signal 0 probe).
+ * @param {number} pid
+ * @returns {boolean}
+ */
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+/**
+ * Atomically write daemon.json (write to .tmp then rename).
+ * Contains port, token, pid, and start timestamp.
+ * @param {number} port
+ * @param {string} token
+ * @param {number} pid
+ */
 function writeDaemonMeta(port, token, pid) {
   const data = { port, token, pid, started: new Date().toISOString() };
   const tmp = DAEMON_JSON + ".tmp";
@@ -58,6 +75,11 @@ function writeDaemonMeta(port, token, pid) {
 
 // ── Daemon ──────────────────────────────────────────────
 
+/**
+ * Start the hudd daemon: spawn Electron with Chromium flags,
+ * connect the CDP debugging pipe, and launch the auth gateway.
+ * @param {number} port - TCP port for the auth gateway
+ */
 async function daemon(port) {
   let electronPath = require("electron");
   const token = crypto.randomBytes(16).toString("hex");
@@ -308,6 +330,10 @@ async function daemon(port) {
   });
 }
 
+/**
+ * Stop the running daemon: read PID from daemon.json, send SIGTERM,
+ * and clean up metadata. Tolerates corrupt/stale daemon.json.
+ */
 function stop() {
   if (!fs.existsSync(DAEMON_JSON)) {
     console.log("no daemon running");
