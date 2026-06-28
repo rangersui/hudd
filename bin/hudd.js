@@ -127,7 +127,10 @@ async function daemon(port) {
     "--disable-local-storage",
     "--disable-session-storage",
     // protection layer: permissions
-    "--deny-permission-prompts",
+    // Removed --deny-permission-prompts: it blanket-denies ALL permissions
+    // including camera/mic/screen capture. Sensitive permissions (media,
+    // display-capture, geolocation) are handled in hud.js via
+    // setPermissionRequestHandler — user clicks Allow/Deny per request.
     // protection layer: networking & telemetry
     "--disable-sync",
     "--disable-background-networking",
@@ -145,13 +148,12 @@ async function daemon(port) {
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-spell-checking",
-    // web APIs that only exist for untrusted pages
-    "--disable-speech-api",
+    // browser product APIs that do not belong in widgets
     "--disable-print-preview",
-    "--disable-notifications",
     "--disable-presentation-api",
     "--disable-remote-playback-api",
-    "--disable-shared-workers",
+    // Kept: notifications, speech API, shared workers. They are widget runtime
+    // capabilities, and non-sensitive permission prompts auto-grant in hud.js.
     // renderer scheduling — keep widgets alive
     "--disable-hang-monitor",
     "--disable-ipc-flooding-protection",
@@ -215,20 +217,24 @@ async function daemon(port) {
       "UseEcoQoSForBackgroundProcess", "ReduceUserAgentMinorVersion",
       "LensOverlay", "LiveCaption",
       "GlobalMediaControls", "GlobalMediaControlsForCast",
-      // web APIs with no HUD use case
-      "OnDeviceWebSpeech", "WebUSB", "WebBluetooth", "WebNFC",
+      // hardware/browser product APIs with no default HUD use case
+      "WebUSB", "WebBluetooth", "WebNFC",
       "IdleDetection", "Portals", "DirectSockets",
-      "WindowPlacement", "ContactsManager", "ContentIndex",
-      // media protection (not playback)
+      "ContactsManager", "ContentIndex",
+      // Kept: OnDeviceWebSpeech and WindowPlacement. Voice widgets and multi-screen
+      // HUDs are first-class runtime use cases, not browser protection layers.
+      // media metadata (not playback/capture)
       "MediaSession", "MediaEngagement",
-      "AutoPictureInPicture", "MediaCapabilities",
-      "SurfaceCapture", "CapturedSurfaceControl",
+      "AutoPictureInPicture",
+      // Kept: MediaCapabilities (codec query), SurfaceCapture,
+      //       CapturedSurfaceControl — needed for getDisplayMedia
     ].join(","),
     // disable-blink-features: protection/irrelevant
     // Keep: Canvas, WebGL, Web Audio, MediaStream, CSS, ResizeObserver
     "--disable-blink-features=" + [
       "NetworkInformation", "BatteryStatus", "WebShare", "DigitalGoods",
-      "Gamepad", "ScreenOrientation", "WakeLock",
+      // Kept: Gamepad, ScreenOrientation, WakeLock. Interactive widgets and
+      // long-running dashboards should use the standard Web APIs directly.
       "Bluetooth", "Serial", "HID",
       "StorageAccessAPI", "TopicsAPI",
       "ComputePressure",

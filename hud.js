@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, globalShortcut, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, Menu, dialog, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -49,10 +49,10 @@ app.commandLine.appendSwitch("disable-databases");
 app.commandLine.appendSwitch("disable-local-storage");
 app.commandLine.appendSwitch("disable-session-storage");
 
-// ── Protection layer: permissions & credentials ──
-// Permissions exist to ask "can this site use your camera?" — widgets
-// use navigator.mediaDevices directly (rendering layer) or require().
-app.commandLine.appendSwitch("deny-permission-prompts");
+// ── Permissions ──
+// Removed deny-permission-prompts: it blanket-denies camera/mic/screen.
+// Sensitive permissions are routed through setPermissionRequestHandler below;
+// non-sensitive widget permissions auto-grant there.
 
 // ── Protection layer: networking & telemetry ──
 app.commandLine.appendSwitch("disable-sync");
@@ -73,13 +73,12 @@ app.commandLine.appendSwitch("no-first-run");
 app.commandLine.appendSwitch("no-default-browser-check");
 app.commandLine.appendSwitch("disable-spell-checking");
 
-// ── Protection layer: web APIs that only exist for untrusted pages ──
-app.commandLine.appendSwitch("disable-speech-api");
+// ── Browser product APIs that do not belong in widgets ──
 app.commandLine.appendSwitch("disable-print-preview");
-app.commandLine.appendSwitch("disable-notifications");
 app.commandLine.appendSwitch("disable-presentation-api");
 app.commandLine.appendSwitch("disable-remote-playback-api");
-app.commandLine.appendSwitch("disable-shared-workers");
+// Kept: notifications, speech API, shared workers. They are widget runtime
+// capabilities, and non-sensitive permission prompts auto-grant below.
 
 // ── Renderer scheduling — keep widgets alive ──
 app.commandLine.appendSwitch("disable-hang-monitor");
@@ -143,14 +142,17 @@ app.commandLine.appendSwitch("disable-features", [
   "UseEcoQoSForBackgroundProcess", "ReduceUserAgentMinorVersion",
   "LensOverlay", "LiveCaption",
   "GlobalMediaControls", "GlobalMediaControlsForCast",
-  // web APIs with no HUD use case (Node equivalents or irrelevant)
-  "OnDeviceWebSpeech", "WebUSB", "WebBluetooth", "WebNFC",
+  // hardware/browser product APIs with no default HUD use case
+  "WebUSB", "WebBluetooth", "WebNFC",
   "IdleDetection", "Portals", "DirectSockets",
-  "WindowPlacement", "ContactsManager", "ContentIndex",
-  // media protection (not playback — keep MediaStream, Web Audio, <video>)
+  "ContactsManager", "ContentIndex",
+  // Kept: OnDeviceWebSpeech and WindowPlacement. Voice widgets and multi-screen
+  // HUDs are first-class runtime use cases, not browser protection layers.
+  // media metadata (not playback/capture)
   "MediaSession", "MediaEngagement",
-  "AutoPictureInPicture", "MediaCapabilities",
-  "SurfaceCapture", "CapturedSurfaceControl",
+  "AutoPictureInPicture",
+  // Kept: MediaCapabilities (codec query), SurfaceCapture,
+  // CapturedSurfaceControl — needed for getDisplayMedia.
 ].join(","));
 
 // ── disable-blink-features: protection/irrelevant blink features ──
@@ -158,7 +160,8 @@ app.commandLine.appendSwitch("disable-features", [
 //       IntersectionObserver — these ARE the rendering engine.
 app.commandLine.appendSwitch("disable-blink-features", [
   "NetworkInformation", "BatteryStatus", "WebShare", "DigitalGoods",
-  "Gamepad", "ScreenOrientation", "WakeLock",
+  // Kept: Gamepad, ScreenOrientation, WakeLock. Interactive widgets and
+  // long-running dashboards should use the standard Web APIs directly.
   "Bluetooth", "Serial", "HID",
   "StorageAccessAPI", "TopicsAPI",
   "ComputePressure",
@@ -484,6 +487,24 @@ const EXTERNAL_DIR = path.join(DATA_DIR, "external");
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);  // no default menu — saves memory, right-click still works
+
+  // ── Media permissions — ask the user, don't blanket-deny ──
+  // Sensitive permissions (camera, mic, screen capture) show a native dialog.
+  // Everything else auto-grants — widgets are trusted local code.
+  const SENSITIVE = new Set(["media", "display-capture", "geolocation"]);
+  const FRIENDLY  = { media: "camera/microphone", "display-capture": "screen capture", geolocation: "location" };
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => {
+    if (!SENSITIVE.has(perm)) return cb(true);
+    const win = BrowserWindow.fromWebContents(wc);
+    const title = (win && !win.isDestroyed() && win.getTitle()) || "Widget";
+    dialog.showMessageBox(win, {
+      type: "question",
+      buttons: ["Allow", "Deny"],
+      defaultId: 0,
+      title: "Permission request",
+      message: `"${title}" wants access to ${FRIENDLY[perm] || perm}.`,
+    }).then(({ response }) => cb(response === 0));
+  });
   loadDir(__dirname, { prefix: null, defaultOnNoMeta: false });
 
   fs.mkdirSync(HOOKS_DIR, { recursive: true });
